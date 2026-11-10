@@ -12,13 +12,14 @@ typedef struct Model {
     int vertexCount;
     Vec3 *vertices;
     Vec3 *normals;
-    // DONE(student): Add more vertex attributes ... 
+    // DONE(student): Add more vertex attributes
     Vec2 *texturecoords;
     ObjTriangle* triangles;
+    
     // Model transformation data
     Vec3 position;
     bool hidden;
-    // DONE(student) ...
+    // DONE(student)
     Mat4 Rx;
     Mat4 Ry;
     Mat4 Rz;
