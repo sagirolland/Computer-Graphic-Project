@@ -167,6 +167,69 @@ static inline Color ColorFromV4(Vec4 v) {
     return (Color){(int)(v.r*255.f), (int)(v.g*255.f), (int)(v.b*255.f), (int)(v.a*255.f)};
 }
 
+static void RotateModelAxis(Mat4 *rotation, Vec3 axis, float angle) {
+    if (M4Eq(*rotation, (Mat4){0})) {
+        *rotation = M4Identity();
+    }
+
+    *rotation = M4MulM4(M4Rotate(angle, axis), *rotation);
+}
+
+static bool *modelShowBoundingBox = NULL;
+static bool *modelShowNormals = NULL;
+
+static void DrawModelDebugOverlays(RenderSettings *settings, Scene *scene) {
+    if (settings->renderingMethod != RENDERING_METHOD_SOFTWARE || !settings->showDebugLayer) return;
+
+    int modelCount = arrlen(scene->models);
+    while (arrlen(modelShowBoundingBox) < modelCount) arrput(modelShowBoundingBox, false);
+    while (arrlen(modelShowNormals) < modelCount) arrput(modelShowNormals, false);
+
+    for (int modelIndex = 0; modelIndex < modelCount; ++modelIndex) {
+        Model *model = &scene->models[modelIndex];
+        if (model->hidden || arrlen(model->vertices) == 0) continue;
+
+        if (modelShowBoundingBox[modelIndex]) {
+            float minX = model->vertices[0].x;
+            float maxX = model->vertices[0].x;
+            float minY = model->vertices[0].y;
+            float maxY = model->vertices[0].y;
+
+            for (int i = 1; i < arrlen(model->vertices); ++i) {
+                minX = MIN(minX, model->vertices[i].x);
+                maxX = MAX(maxX, model->vertices[i].x);
+                minY = MIN(minY, model->vertices[i].y);
+                maxY = MAX(maxY, model->vertices[i].y);
+            }
+
+            Vector2 topLeft = { (minX + 1.f)*settings->width/2.f, (minY + 1.f)*settings->width/2.f };
+            Vector2 topRight = { (maxX + 1.f)*settings->width/2.f, (minY + 1.f)*settings->width/2.f };
+            Vector2 bottomRight = { (maxX + 1.f)*settings->width/2.f, (maxY + 1.f)*settings->width/2.f };
+            Vector2 bottomLeft = { (minX + 1.f)*settings->width/2.f, (maxY + 1.f)*settings->width/2.f };
+            DrawLineEx(topLeft, topRight, 2.f, GREEN);
+            DrawLineEx(topRight, bottomRight, 2.f, GREEN);
+            DrawLineEx(bottomRight, bottomLeft, 2.f, GREEN);
+            DrawLineEx(bottomLeft, topLeft, 2.f, GREEN);
+        }
+
+        if (modelShowNormals[modelIndex]) {
+            int normalCount = arrlen(model->normals);
+            for (int i = 0; i + 2 < arrlen(model->vertices) && i + 2 < normalCount; i += 3) {
+                Vec3 center = V3MulS(V3Add(
+                    V3Add(model->vertices[i], model->vertices[i + 1]),
+                    model->vertices[i + 2]), 1.f/3.f);
+                Vec3 normal = V3Normalize(V3Add(
+                    V3Add(model->normals[i], model->normals[i + 1]),
+                    model->normals[i + 2]));
+                Vector2 start = { (center.x + 1.f)*settings->width/2.f, (center.y + 1.f)*settings->width/2.f };
+                Vec3 normalEnd = V3Add(center, V3MulS(normal, 0.1f));
+                Vector2 end = { (normalEnd.x + 1.f)*settings->width/2.f, (normalEnd.y + 1.f)*settings->width/2.f };
+                DrawLineEx(start, end, 2.f, RED);
+            }
+        }
+    }
+}
+
 static void Tooltip(const char *label, int x, int y) {
     GuiSetTooltip(label);
     GuiEnableTooltip();
@@ -228,6 +291,7 @@ void CreateInterface(RenderSettings *settings, Scene *scene) {
     const char *label = GuiIconText(showInterface ? ICON_EYE_ON : ICON_EYE_OFF, NULL);
     GuiToggle((Rectangle) {0, 0, 20, 20}, label, &showInterface);
     
+    DrawModelDebugOverlays(settings, scene);
     if (!showInterface) return;
     
     const char *tooltip = NULL;
@@ -357,7 +421,24 @@ void CreateInterface(RenderSettings *settings, Scene *scene) {
                 
                 bool value;
                 GuiToggle(rect, GuiIconText(ICON_PLAYER, NULL), &value);
-                // TODO(student)
+                // TODO(student)DONE WSAD movement for the active model
+                if (value && 0 <= scene->activeModelIndex && scene->activeModelIndex < arrlen(scene->models))
+                {
+                    Model *m = &scene->models[scene->activeModelIndex];
+
+                    if (IsKeyDown(KEY_W))
+                        m->position.z += scene->step;
+                    if (IsKeyDown(KEY_S))
+                        m->position.z -= scene->step;
+                    if (IsKeyDown(KEY_A))
+                        m->position.x -= scene->step;
+                    if (IsKeyDown(KEY_D))
+                        m->position.x += scene->step;
+                    if (IsKeyDown(KEY_Q))
+                        m->position.y += scene->step;
+                    if (IsKeyDown(KEY_E))
+                        m->position.y -= scene->step;
+                }
             }
             
             // Primitives
@@ -369,12 +450,57 @@ void CreateInterface(RenderSettings *settings, Scene *scene) {
                     tooltip = "Add Cube";
                 }
                 if (GuiButton(rect, GuiIconText(ICON_CUBE, NULL))) {
-                    // TODO(student)
-                    // Model primitive = MakePrimitiveCube();
-                    // AddModel(scene, primitive);
+                    // TODO(student)DONE
+                    Model primitive = MakePrimitiveCube();
+                    AddModel(scene, primitive);
                 }
             }
             // Other primitives
+            {
+                Rectangle rect = (Rectangle){left, uiTop, 2 * margin, 2 * margin};
+                left += rect.width + 2;
+
+                if (!GuiIsLocked() && CheckCollisionPointRec(GetMousePosition(), rect))
+                {
+                    tooltip = "Add Sphere";
+                }
+                if (GuiButton(rect, GuiIconText(ICON_SPHERE, NULL)))
+                {
+                    // TODO(student)DONE
+                    Model primitive = MakePrimitiveSphere();
+                    AddModel(scene, primitive);
+                }
+            }
+            {
+                Rectangle rect = (Rectangle){left, uiTop, 2 * margin, 2 * margin};
+                left += rect.width + 2;
+
+                if (!GuiIsLocked() && CheckCollisionPointRec(GetMousePosition(), rect))
+                {
+                    tooltip = "Add Triangle";
+                }
+                if (GuiButton(rect, GuiIconText(ICON_TRIANGLE, NULL)))
+                {
+                    // TODO(student)DONE
+                    Model primitive = MakePrimitiveTriangle();
+                    AddModel(scene, primitive);
+                }
+            }
+            {
+                Rectangle rect = (Rectangle){left, uiTop, 2 * margin, 2 * margin};
+                left += rect.width + 2;
+
+                if (!GuiIsLocked() && CheckCollisionPointRec(GetMousePosition(), rect))
+                {
+                    tooltip = "Add Pyramid";
+                }
+                if (GuiButton(rect, GuiIconText(ICON_PYRAMID, NULL)))
+                {
+                    // TODO(student)DONE
+                    Model primitive = MakePrimitive4SidedPyramid();
+                    AddModel(scene, primitive);
+                }
+            }
         }
         uiTop += 2*margin + margin;
         
@@ -411,8 +537,34 @@ void CreateInterface(RenderSettings *settings, Scene *scene) {
                 BOX_FLOAT(&activeModel->position.y, &left, uiTop, NULL);
                 BOX_FLOAT(&activeModel->position.z, &left, uiTop, NULL);
             }
-            // TODO(student) ...
-            
+            // TODO(student) ...DONE ROTATION
+            {
+                const float quarterTurn = 1.57079632679f;
+                const char *label = "rotate 90:";
+                Rectangle labelRect = (Rectangle) { left, uiTop, 100, 16 };
+                GuiDrawText(label, labelRect, TEXT_ALIGN_LEFT, GetColor(GuiGetStyle(DEFAULT, TEXT)));
+                left += labelRect.width + 2;
+
+                Rectangle rect = (Rectangle) { left, uiTop, 28, 16 };
+                if (GuiButton(rect, "X+")) RotateModelAxis(&activeModel->Rx, (Vec3){1.f, 0.f, 0.f}, quarterTurn);
+                left += rect.width + 2;
+                rect.x = left;
+                if (GuiButton(rect, "X-")) RotateModelAxis(&activeModel->Rx, (Vec3){1.f, 0.f, 0.f}, -quarterTurn);
+                left += rect.width + 2;
+
+                rect.x = left;
+                if (GuiButton(rect, "Y+")) RotateModelAxis(&activeModel->Ry, (Vec3){0.f, 1.f, 0.f}, quarterTurn);
+                left += rect.width + 2;
+                rect.x = left;
+                if (GuiButton(rect, "Y-")) RotateModelAxis(&activeModel->Ry, (Vec3){0.f, 1.f, 0.f}, -quarterTurn);
+                left += rect.width + 2;
+
+                rect.x = left;
+                if (GuiButton(rect, "Z+")) RotateModelAxis(&activeModel->Rz, (Vec3){0.f, 0.f, 1.f}, quarterTurn);
+                left += rect.width + 2;
+                rect.x = left;
+                if (GuiButton(rect, "Z-")) RotateModelAxis(&activeModel->Rz, (Vec3){0.f, 0.f, 1.f}, -quarterTurn);
+            }
             uiTop += rowHeight;
             
             if (activeModel == &dummyModel) {
@@ -440,6 +592,8 @@ void CreateInterface(RenderSettings *settings, Scene *scene) {
             int rowHeight = 2*margin;
             int itemCount = 6;
             int modelCount = arrlen(scene->models);
+            while (arrlen(modelShowBoundingBox) < modelCount) arrput(modelShowBoundingBox, false);
+            while (arrlen(modelShowNormals) < modelCount) arrput(modelShowNormals, false);
             
             static Rectangle modelPanelView = { 0 };
             Rectangle scrollRect = (Rectangle) { uiLeft - 1, uiTop - 1, uiWidth - 2*margin + 2, itemCount*(rowHeight + 2) };
@@ -488,10 +642,35 @@ void CreateInterface(RenderSettings *settings, Scene *scene) {
                     
                     if (GuiButton(rect, GuiIconText(ICON_BIN, NULL))) {
                         RemoveModel(scene, modelIndex);
+                        arrdel(modelShowBoundingBox, modelIndex);
+                        arrdel(modelShowNormals, modelIndex);
                         if (scene->activeModelIndex >= modelIndex) scene->activeModelIndex -= 1;
+                        --modelCount;
+                        --modelIndex;
+                        continue;
                     }
                 }
-                // TODO(student) ...
+                // TODO(student)DONE Add buttons to show/hide bounding box and normals for each model
+                {
+                    Rectangle rect = (Rectangle) { right - 2*margin, scrollTop, 2*margin, 2*margin };
+                    right -= rect.width + 2;
+
+                    if (!GuiIsLocked() && CheckCollisionPointRec(GetMousePosition(), rect)) {
+                        tooltip = "Show/Hide Bounding Box";
+                    }
+
+                    GuiToggle(rect, GuiIconText(ICON_BOX, NULL), &modelShowBoundingBox[modelIndex]);
+                }
+                {
+                    Rectangle rect = (Rectangle) { right - 2*margin, scrollTop, 2*margin, 2*margin };
+                    right -= rect.width + 2;
+
+                    if (!GuiIsLocked() && CheckCollisionPointRec(GetMousePosition(), rect)) {
+                        tooltip = "Show/Hide Normals";
+                    }
+
+                    GuiToggle(rect, GuiIconText(ICON_ARROW_UP, NULL), &modelShowNormals[modelIndex]);
+                }
                 
                 {
                     const char *label = TextFormat(" Model %3d", modelIndex);
@@ -588,8 +767,21 @@ void CreateInterface(RenderSettings *settings, Scene *scene) {
                     // Note that 'TextFormat' uses global storage for the strings it returns, so don't save pointers
                     // to those directly if you need to store them long-term, copy the result into a persistant buffer.
                     TraceLog(LOG_INFO, TextFormat("Selected file: %s" PATH_SEPERATOR "%s", fileDialogState.dirPathText, fileDialogState.fileNameText));
-                    
-                    // TODO(student): Load the model and add it to the scene
+                    //TODO(student)DONE Load the model from the selected file and add it to the scene
+                    const char *modelPath = TextFormat("%s" PATH_SEPERATOR "%s",
+                                                       fileDialogState.dirPathText,
+                                                       fileDialogState.fileNameText);
+                    if (!FileExists(modelPath)) {
+                        TraceLog(LOG_ERROR, "Selected model file does not exist: %s", modelPath);
+                    } else {
+                        Model model = LoadModelFromObjFile(modelPath);
+                        model.vertexCount = arrlen(model.vertices);
+                        AddModel(scene, model);
+                        scene->activeModelIndex = arrlen(scene->models) - 1;
+                    }
+                } break;
+                default: {
+                    TraceLog(LOG_WARNING, "Unsupported file dialog operation: %d", fileDialogOperation);
                 } break;
             }
             fileDialogState.SelectFilePressed = false;
