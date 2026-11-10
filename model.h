@@ -3,6 +3,10 @@
 
 #include "math.h"
 
+typedef struct ObjTriangle {
+    Vec3i corners[3]; // each is {v, vt, vn}
+} ObjTriangle;
+
 typedef struct Model {
     // Model geometry data
     int vertexCount;
@@ -43,9 +47,7 @@ void FreeModel(Model *model);
 // Provided helper functions
 //
 
-typedef struct ObjTriangle {
-    Vec3i corners[3]; // each is {v, vt, vn}
-} ObjTriangle;
+
 
 static int ParseNextInt(const char *str, int *start, int len) {
     int sign = 1;
