@@ -11,6 +11,7 @@ typedef struct Camera {
     Vec3 euclideanBasis[3];
     Vec4 homogeneousBasis[4];
     Mat4 viewMatrix;
+    bool hidden;
     // TODO(student)
 } Camera;
 
