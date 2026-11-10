@@ -9,7 +9,8 @@ typedef struct Model {
     Vec3 *vertices;
     Vec3 *normals;
     // TODO(student): Add more vertex attributes ... 
-    
+    Vec2 *texturecoords;
+
     // Model transformation data
     Vec3 position;
     bool hidden;

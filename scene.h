@@ -6,6 +6,11 @@
 
 typedef struct Camera {
     Vec3 Position;
+    Vec3 Target;
+    Vec2 orthoplaneSize;
+    Vec3 euclideanBasis[3];
+    Vec4 homogeneousBasis[4];
+    Mat4 viewMatrix;
     // TODO(student)
 } Camera;
 
