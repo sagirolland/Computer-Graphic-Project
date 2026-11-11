@@ -13,17 +13,16 @@ typedef struct Camera {
     Vec3 Position;
     Vec3 Target;
     Vec2 xBounds; //left, right
-    Vec2 yBounds; //top, bottom
+    Vec2 yBounds; //bottom, top
     Vec2 zBounds; //zFar, zNear
     Vec3 up;
     //Vec3 euclideanBasis[3];
     //Vec4 homogeneousBasis[4];
     Mat4 viewMatrix;
-    ProjectionType projectionType;
     float fov;
     float aspect;
+    ProjectionType projectionType;
     bool hidden;
-    
     // TODO(student)
 } Camera;
 

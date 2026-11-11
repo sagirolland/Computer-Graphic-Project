@@ -175,6 +175,30 @@ static void RotateModelAxis(Mat4 *rotation, Vec3 axis, float angle) {
     *rotation = M4MulM4(M4Rotate(angle, axis), *rotation);
 }
 
+static void RotateCameraView(Camera *camera, Vec3 axis, float angle) {
+    Vec3 viewDirection = V3Sub(camera->Target, camera->Position);
+    if (V3Length(viewDirection) < EPSILON) return;
+
+    camera->Target = V3Add(camera->Position,
+                           M4MulV3(M4Rotate(angle, axis), viewDirection));
+}
+
+static Vec3 CameraRelativeMovement(Camera *camera, Vec3 movement) {
+    Vec3 forward = V3Normalize(V3Sub(camera->Target, camera->Position));
+    if (V3Length(forward) < EPSILON) return (Vec3){0};
+
+    Vec3 worldUp = {0.f, 0.f, 1.f};
+    Vec3 right = V3Cross(forward, worldUp);
+    if (V3Length(right) < EPSILON) right = (Vec3){1.f, 0.f, 0.f};
+    right = V3Normalize(right);
+    Vec3 up = V3Normalize(V3Cross(right, forward));
+
+    Vec3 result = V3Add(V3MulS(right, movement.x),
+                        V3Add(V3MulS(up, movement.y), V3MulS(forward, movement.z)));
+    if (V3Length(result) > 1.f) result = V3Normalize(result);
+    return result;
+}
+
 static bool *modelShowBoundingBox = NULL;
 static bool *modelShowNormals = NULL;
 
@@ -392,7 +416,14 @@ void CreateInterface(RenderSettings *settings, Scene *scene) {
         GuiLine((Rectangle) { uiLeft + margin, uiTop + margin, uiWidth - margin*2, 0 }, "Model Controls");
         uiTop += 2*margin;
     }
-    
+    static bool showCameraControls = true;
+    {
+        Rectangle rect = (Rectangle){uiLeft - margin / 2, uiTop + margin / 2, margin, margin};
+        GuiCheckBox(rect, NULL, &showCameraControls);
+
+        GuiLine((Rectangle){uiLeft + margin, uiTop + margin, uiWidth - margin * 2, 0}, "Camera Controls");
+        uiTop += 2 * margin;
+    }
     if (showModelControls) {
         {
             float left = uiLeft + margin;
@@ -413,31 +444,45 @@ void CreateInterface(RenderSettings *settings, Scene *scene) {
             }
             {
                 Rectangle rect = (Rectangle) { right - iconButtonSize, uiTop, iconButtonSize, iconButtonSize };
-                right -= iconButtonSize + 2;
                 
                 if (!GuiIsLocked() && CheckCollisionPointRec(GetMousePosition(), rect)) {
                     tooltip = "Control active model with keyboard";
                 }
                 
-                bool value;
+                static bool value = false;
                 GuiToggle(rect, GuiIconText(ICON_PLAYER, NULL), &value);
+                static bool moveModelRelativeToCamera = false;
+                rect = (Rectangle){right - iconButtonSize - 66, uiTop, 64, iconButtonSize};
+                if (!GuiIsLocked() && CheckCollisionPointRec(GetMousePosition(), rect)) {
+                    tooltip = "Choose world or active-camera-relative keyboard movement";
+                }
+                GuiToggle(rect, moveModelRelativeToCamera ? "Camera" : "World",
+                          &moveModelRelativeToCamera);
                 // TODO(student)DONE WSAD movement for the active model
-                if (value && 0 <= scene->activeModelIndex && scene->activeModelIndex < arrlen(scene->models))
+                if (value && !GuiIsLocked() &&
+                    0 <= scene->activeModelIndex &&
+                    scene->activeModelIndex < arrlen(scene->models))
                 {
                     Model *m = &scene->models[scene->activeModelIndex];
+                    Vec3 movement = {0};
+                    if (IsKeyDown(KEY_W)) movement.z += scene->step;
+                    if (IsKeyDown(KEY_S)) movement.z -= scene->step;
+                    if (IsKeyDown(KEY_A)) movement.x -= scene->step;
+                    if (IsKeyDown(KEY_D)) movement.x += scene->step;
+                    if (IsKeyDown(KEY_Q)) movement.y += scene->step;
+                    if (IsKeyDown(KEY_E)) movement.y -= scene->step;
 
-                    if (IsKeyDown(KEY_W))
-                        m->position.z += scene->step;
-                    if (IsKeyDown(KEY_S))
-                        m->position.z -= scene->step;
-                    if (IsKeyDown(KEY_A))
-                        m->position.x -= scene->step;
-                    if (IsKeyDown(KEY_D))
-                        m->position.x += scene->step;
-                    if (IsKeyDown(KEY_Q))
-                        m->position.y += scene->step;
-                    if (IsKeyDown(KEY_E))
-                        m->position.y -= scene->step;
+                    bool cameraRelativeMovement = false;
+                    if (moveModelRelativeToCamera &&
+                        0 <= scene->activeCameraIndex &&
+                        scene->activeCameraIndex < arrlen(scene->cameras)) {
+                        movement = CameraRelativeMovement(
+                            &scene->cameras[scene->activeCameraIndex], movement);
+                        cameraRelativeMovement = true;
+                    }
+                    m->position = cameraRelativeMovement
+                        ? V3Sub(m->position, movement)
+                        : V3Add(m->position, movement);
                 }
             }
             
@@ -479,7 +524,7 @@ void CreateInterface(RenderSettings *settings, Scene *scene) {
                 {
                     tooltip = "Add Triangle";
                 }
-                if (GuiButton(rect, GuiIconText(ICON_TRIANGLE, NULL)))
+                if (GuiButton(rect, GuiIconText(ICON_CROSS_SMALL, NULL)))
                 {
                     // TODO(student)DONE
                     Model primitive = MakePrimitiveTriangle();
@@ -494,7 +539,7 @@ void CreateInterface(RenderSettings *settings, Scene *scene) {
                 {
                     tooltip = "Add Pyramid";
                 }
-                if (GuiButton(rect, GuiIconText(ICON_PYRAMID, NULL)))
+                if (GuiButton(rect, GuiIconText(ICON_CROSS_SMALL, NULL)))
                 {
                     // TODO(student)DONE
                     Model primitive = MakePrimitive4SidedPyramid();
@@ -533,37 +578,40 @@ void CreateInterface(RenderSettings *settings, Scene *scene) {
                 GuiDrawText(label, rect, TEXT_ALIGN_LEFT, GetColor(GuiGetStyle(DEFAULT, TEXT)));
                 left += rect.width + 2;
                 
-                BOX_FLOAT(&activeModel->position.x, &left, uiTop, NULL);
-                BOX_FLOAT(&activeModel->position.y, &left, uiTop, NULL);
-                BOX_FLOAT(&activeModel->position.z, &left, uiTop, NULL);
+                BOX_FLOAT(&activeModel->position.x, &left, uiTop, "Drag vertically to edit the X position");
+                BOX_FLOAT(&activeModel->position.y, &left, uiTop, "Drag vertically to edit the Y position");
+                BOX_FLOAT(&activeModel->position.z, &left, uiTop, "Drag vertically to edit the Z position");
             }
             // TODO(student) ...DONE ROTATION
             {
-                const float quarterTurn = 1.57079632679f;
-                const char *label = "rotate 90:";
-                Rectangle labelRect = (Rectangle) { left, uiTop, 100, 16 };
+                static float rotationDegrees = 90.f;
+                const char *label = "Rotate (deg):";
+                left = uiLeft + margin;
+                Rectangle labelRect = (Rectangle) { left, uiTop, 88, 16 };
                 GuiDrawText(label, labelRect, TEXT_ALIGN_LEFT, GetColor(GuiGetStyle(DEFAULT, TEXT)));
                 left += labelRect.width + 2;
+                BOX_FLOAT(&rotationDegrees, &left, uiTop, "Rotation angle in degrees");
+                float angle = rotationDegrees * 0.01745329252f;
 
-                Rectangle rect = (Rectangle) { left, uiTop, 28, 16 };
-                if (GuiButton(rect, "X+")) RotateModelAxis(&activeModel->Rx, (Vec3){1.f, 0.f, 0.f}, quarterTurn);
-                left += rect.width + 2;
+                Rectangle rect = (Rectangle) { left, uiTop, 24, 16 };
+                if (GuiButton(rect, "X+")) RotateModelAxis(&activeModel->Rx, (Vec3){1.f, 0.f, 0.f}, angle);
+                left += rect.width + 1;
                 rect.x = left;
-                if (GuiButton(rect, "X-")) RotateModelAxis(&activeModel->Rx, (Vec3){1.f, 0.f, 0.f}, -quarterTurn);
-                left += rect.width + 2;
-
-                rect.x = left;
-                if (GuiButton(rect, "Y+")) RotateModelAxis(&activeModel->Ry, (Vec3){0.f, 1.f, 0.f}, quarterTurn);
-                left += rect.width + 2;
-                rect.x = left;
-                if (GuiButton(rect, "Y-")) RotateModelAxis(&activeModel->Ry, (Vec3){0.f, 1.f, 0.f}, -quarterTurn);
-                left += rect.width + 2;
+                if (GuiButton(rect, "X-")) RotateModelAxis(&activeModel->Rx, (Vec3){1.f, 0.f, 0.f}, -angle);
+                left += rect.width + 1;
 
                 rect.x = left;
-                if (GuiButton(rect, "Z+")) RotateModelAxis(&activeModel->Rz, (Vec3){0.f, 0.f, 1.f}, quarterTurn);
-                left += rect.width + 2;
+                if (GuiButton(rect, "Y+")) RotateModelAxis(&activeModel->Ry, (Vec3){0.f, 1.f, 0.f}, angle);
+                left += rect.width + 1;
                 rect.x = left;
-                if (GuiButton(rect, "Z-")) RotateModelAxis(&activeModel->Rz, (Vec3){0.f, 0.f, 1.f}, -quarterTurn);
+                if (GuiButton(rect, "Y-")) RotateModelAxis(&activeModel->Ry, (Vec3){0.f, 1.f, 0.f}, -angle);
+                left += rect.width + 1;
+
+                rect.x = left;
+                if (GuiButton(rect, "Z+")) RotateModelAxis(&activeModel->Rz, (Vec3){0.f, 0.f, 1.f}, angle);
+                left += rect.width + 1;
+                rect.x = left;
+                if (GuiButton(rect, "Z-")) RotateModelAxis(&activeModel->Rz, (Vec3){0.f, 0.f, 1.f}, -angle);
             }
             uiTop += rowHeight;
             
@@ -714,7 +762,408 @@ void CreateInterface(RenderSettings *settings, Scene *scene) {
             if (lock) GuiUnlock();
         }
     }
-    
+    if (showCameraControls)
+    {
+        uiTop += 2 * margin + margin;
+
+        {
+            int right = uiRect.x + uiRect.width - margin;
+            Rectangle rect = (Rectangle){right - iconButtonSize, uiTop, iconButtonSize, iconButtonSize};
+
+            if (!GuiIsLocked() && CheckCollisionPointRec(GetMousePosition(), rect)) {
+                tooltip = "Control active camera with keyboard";
+            }
+
+            static bool controlActiveCameraWithKeyboard = false;
+            GuiToggle(rect, GuiIconText(ICON_PLAYER, NULL), &controlActiveCameraWithKeyboard);
+            static bool moveCameraRelativeToView = false;
+            rect = (Rectangle){right - iconButtonSize - 66, uiTop, 64, iconButtonSize};
+            if (!GuiIsLocked() && CheckCollisionPointRec(GetMousePosition(), rect)) {
+                tooltip = "Choose world or view-relative keyboard movement";
+            }
+            GuiToggle(rect, moveCameraRelativeToView ? "View" : "World",
+                      &moveCameraRelativeToView);
+
+            if (controlActiveCameraWithKeyboard &&
+                !GuiIsLocked() &&
+                0 <= scene->activeCameraIndex &&
+                scene->activeCameraIndex < arrlen(scene->cameras)) {
+                Camera *camera = &scene->cameras[scene->activeCameraIndex];
+                Vec3 movement = {0};
+                if (IsKeyDown(KEY_W)) movement.z += scene->step;
+                if (IsKeyDown(KEY_S)) movement.z -= scene->step;
+                if (IsKeyDown(KEY_A)) movement.x -= scene->step;
+                if (IsKeyDown(KEY_D)) movement.x += scene->step;
+                if (IsKeyDown(KEY_Q)) movement.y += scene->step;
+                if (IsKeyDown(KEY_E)) movement.y -= scene->step;
+                if (moveCameraRelativeToView) {
+                    movement = CameraRelativeMovement(camera, movement);
+                }
+                camera->Position = V3Add(camera->Position, movement);
+                camera->Target = V3Add(camera->Target, movement);
+            }
+        }
+
+        { // Transform controls for the active camera
+            Camera dummyCamera = {};
+            Camera *activeCamera = NULL;
+            static bool lock = false;
+
+            if (0 < arrlen(scene->cameras) && 0 <= scene->activeCameraIndex && scene->activeCameraIndex < arrlen(scene->cameras))
+            {
+                activeCamera = &scene->cameras[scene->activeCameraIndex];
+                lock = false;
+            }
+            else
+            {
+                // If there's no active model selected, we want to draw the same UI but locked
+                // so we have a dummy model to prevent illegal pointer access when drawing the GUI
+                activeCamera = &dummyCamera;
+
+                // We want to lock only if the gui is not already locked so we don't unlock it later
+                // if it was intended to stay locked (for example if the file dialog is open)
+                lock = !GuiIsLocked();
+            }
+            if (lock)
+                GuiLock();
+
+            float rowHeight = 16;
+            float controlTop = uiTop;
+
+            float left = uiLeft + margin;
+            {
+                const char *label = "position: ";
+                Rectangle rect = (Rectangle){left, uiTop, 100, 16};
+                GuiDrawText(label, rect, TEXT_ALIGN_LEFT, GetColor(GuiGetStyle(DEFAULT, TEXT)));
+                left += rect.width + 2;
+
+                BOX_FLOAT(&activeCamera->Position.x, &left, uiTop, "Drag vertically to edit the X position");
+                BOX_FLOAT(&activeCamera->Position.y, &left, uiTop, "Drag vertically to edit the Y position");
+                BOX_FLOAT(&activeCamera->Position.z, &left, uiTop, "Drag vertically to edit the Z position");
+            }
+            {
+                const char *label = "target: ";
+                Rectangle rect = (Rectangle){uiLeft + margin, uiTop + rowHeight, 100, 16};
+                GuiDrawText(label, rect, TEXT_ALIGN_LEFT, GetColor(GuiGetStyle(DEFAULT, TEXT)));
+
+                float targetLeft = rect.x + rect.width + 2;
+                BOX_FLOAT(&activeCamera->Target.x, &targetLeft, uiTop + rowHeight, NULL);
+                BOX_FLOAT(&activeCamera->Target.y, &targetLeft, uiTop + rowHeight, NULL);
+                BOX_FLOAT(&activeCamera->Target.z, &targetLeft, uiTop + rowHeight, NULL);
+            }
+            uiTop += rowHeight + rowHeight;
+            {
+                Rectangle rect = (Rectangle){uiLeft + margin, uiTop + rowHeight, 100, 16};
+                {
+                    int projectionRows;
+
+                    if (activeCamera->projectionType == PERSPECTIVE)
+                    {
+                        Rectangle rect = (Rectangle){uiLeft + margin, uiTop, 100, 16};
+                        GuiDrawText("FOV (radians):", rect, TEXT_ALIGN_LEFT,
+                                    GetColor(GuiGetStyle(DEFAULT, TEXT)));
+
+                        float fieldLeft = rect.x + rect.width + 2;
+                        BOX_FLOAT(&activeCamera->fov, &fieldLeft, uiTop,
+                                  "Field of view in radians");
+
+                        rect.y += rowHeight;
+                        GuiDrawText("Aspect:", rect, TEXT_ALIGN_LEFT,
+                                    GetColor(GuiGetStyle(DEFAULT, TEXT)));
+
+                        fieldLeft = rect.x + rect.width + 2;
+                        BOX_FLOAT(&activeCamera->aspect, &fieldLeft, uiTop + rowHeight,
+                                  "Image width divided by height");
+
+                        projectionRows = 2;
+                    }
+                    else
+                    {
+                        Rectangle rect = (Rectangle){uiLeft + margin, uiTop, 100, 16};
+                        float fieldLeft = rect.x + rect.width + 2;
+
+                        GuiDrawText("X left/right:", rect, TEXT_ALIGN_LEFT,
+                                    GetColor(GuiGetStyle(DEFAULT, TEXT)));
+                        BOX_FLOAT(&activeCamera->xBounds.x, &fieldLeft, uiTop, "Left bound");
+                        BOX_FLOAT(&activeCamera->xBounds.y, &fieldLeft, uiTop, "Right bound");
+
+                        rect.y += rowHeight;
+                        fieldLeft = rect.x + rect.width + 2;
+                        GuiDrawText("Y bottom/top:", rect, TEXT_ALIGN_LEFT,
+                                    GetColor(GuiGetStyle(DEFAULT, TEXT)));
+                        BOX_FLOAT(&activeCamera->yBounds.x, &fieldLeft, uiTop + rowHeight, "Bottom bound");
+                        BOX_FLOAT(&activeCamera->yBounds.y, &fieldLeft, uiTop + rowHeight, "Top bound");
+
+                        rect.y += rowHeight;
+                        fieldLeft = rect.x + rect.width + 2;
+                        GuiDrawText("Z far/near:", rect, TEXT_ALIGN_LEFT,
+                                    GetColor(GuiGetStyle(DEFAULT, TEXT)));
+                        BOX_FLOAT(&activeCamera->zBounds.x, &fieldLeft, uiTop + 2 * rowHeight, "Far plane");
+                        BOX_FLOAT(&activeCamera->zBounds.y, &fieldLeft, uiTop + 2 * rowHeight, "Near plane");
+
+                        projectionRows = 3;
+                    }
+
+                    uiTop += projectionRows * rowHeight;
+                }
+            }
+
+                // TODO(student) ...DONE ROTATION
+                {
+                    static float rotationDegrees = 90.f;
+                    const char *label = "Rotate (deg):";
+                    left = uiLeft + margin;
+                    Rectangle labelRect = (Rectangle){left, uiTop, 88, 16};
+                    GuiDrawText(label, labelRect, TEXT_ALIGN_LEFT, GetColor(GuiGetStyle(DEFAULT, TEXT)));
+                    left += labelRect.width + 2;
+                    BOX_FLOAT(&rotationDegrees, &left, uiTop, "Rotation angle in degrees");
+                    float angle = rotationDegrees * 0.01745329252f;
+
+                    Rectangle rect = (Rectangle){left, uiTop, 24, 16};
+                    if (GuiButton(rect, "X+"))
+                        RotateCameraView(activeCamera, (Vec3){1.f, 0.f, 0.f}, angle);
+                    left += rect.width + 1;
+                    rect.x = left;
+                    if (GuiButton(rect, "X-"))
+                        RotateCameraView(activeCamera, (Vec3){1.f, 0.f, 0.f}, -angle);
+                    left += rect.width + 1;
+
+                    rect.x = left;
+                    if (GuiButton(rect, "Y+"))
+                        RotateCameraView(activeCamera, (Vec3){0.f, 1.f, 0.f}, angle);
+                    left += rect.width + 1;
+                    rect.x = left;
+                    if (GuiButton(rect, "Y-"))
+                        RotateCameraView(activeCamera, (Vec3){0.f, 1.f, 0.f}, -angle);
+                    left += rect.width + 1;
+
+                    rect.x = left;
+                    if (GuiButton(rect, "Z+"))
+                        RotateCameraView(activeCamera, (Vec3){0.f, 0.f, 1.f}, angle);
+                    left += rect.width + 1;
+                    rect.x = left;
+                    if (GuiButton(rect, "Z-"))
+                        RotateCameraView(activeCamera, (Vec3){0.f, 0.f, 1.f}, -angle);
+                    left += rect.width + 3;
+
+                    rect = (Rectangle){left, uiTop, 88, 16};
+                    if (!GuiIsLocked() && CheckCollisionPointRec(GetMousePosition(), rect)) {
+                        tooltip = "Aim the active camera at the active model";
+                    }
+                    bool hasActiveModel = 0 <= scene->activeModelIndex &&
+                                         scene->activeModelIndex < arrlen(scene->models);
+                    if (GuiButton(rect, "Focus Model") && hasActiveModel) {
+                        Model *model = &scene->models[scene->activeModelIndex];
+                        activeCamera->Target = V3Neg(model->position);
+                    }
+                }
+            uiTop += rowHeight;
+
+            if (activeCamera == &dummyCamera)
+            {
+                Rectangle rect = (Rectangle){uiLeft - margin, controlTop - margin / 2, uiWidth, uiTop - controlTop + margin};
+                int textAlignStyle = GuiGetStyle(DEFAULT, TEXT_ALIGNMENT_VERTICAL);
+
+                GuiSetStyle(DEFAULT, TEXT_ALIGNMENT_VERTICAL, TEXT_ALIGN_MIDDLE);
+
+                Color backcolor = GetColor(GuiGetStyle(DEFAULT, BASE_COLOR_DISABLED));
+                backcolor.a = 230;
+                GuiDrawRectangle(rect, 2,
+                                 GetColor(GuiGetStyle(BORDER, BORDER_COLOR_DISABLED)),
+                                 backcolor);
+                GuiDrawText("No camera selected", rect, TEXT_ALIGN_CENTER,
+                            GetColor(GuiGetStyle(DEFAULT, TEXT_COLOR_DISABLED)));
+
+                GuiSetStyle(DEFAULT, TEXT_ALIGNMENT_VERTICAL, textAlignStyle);
+            }
+            uiTop += margin;
+
+            if (lock)
+                GuiUnlock();
+        }
+
+        { // Camera list controls
+            int rowHeight = 2 * margin;
+            int itemCount = 6;
+            int cameraCount = arrlen(scene->cameras);
+
+            if (cameraCount == 0) {
+                Rectangle rect = (Rectangle){uiLeft + margin, uiTop, 100, 2 * margin};
+                if (GuiButton(rect, "Add Camera")) {
+                    Camera camera = {0};
+                    camera.Position = (Vec3){0.f, -5.f, 2.f};
+                    camera.Target = (Vec3){0.f, 0.f, 0.f};
+                    camera.xBounds = (Vec2){-1.f, 1.f};
+                    camera.yBounds = (Vec2){-1.f, 1.f};
+                    camera.zBounds = (Vec2){100.f, 0.1f};
+                    camera.fov = 1.0471975512f;
+                    camera.aspect = settings->height > 0
+                        ? (float)settings->width / settings->height
+                        : 1.f;
+                    camera.projectionType = PERSPECTIVE;
+                    AddCamera(scene, camera);
+                    scene->activeCameraIndex = arrlen(scene->cameras) - 1;
+                    cameraCount = arrlen(scene->cameras);
+                }
+                uiTop += 2 * margin + 2;
+            }
+
+            static Rectangle cameraPanelView = {0};
+            Rectangle scrollRect = (Rectangle){uiLeft - 1, uiTop - 1, uiWidth - 2 * margin + 2, itemCount * (rowHeight + 2)};
+            Rectangle contentRect = scrollRect;
+            contentRect.x += 1;
+            contentRect.y += 1;
+            int scrollBarWidth = GuiGetStyle(LISTVIEW, SCROLLBAR_WIDTH) + 2 * GuiGetStyle(DEFAULT, BORDER_WIDTH);
+            contentRect.width -= scrollBarWidth + 2;
+            contentRect.height = cameraCount * (rowHeight + 2);
+            static Vector2 panelScroll = {0, 0};
+            GuiScrollPanel(scrollRect, NULL, contentRect, &panelScroll, &cameraPanelView);
+            int scrollTop = contentRect.y + panelScroll.y;
+
+            if (contentRect.height < scrollRect.height)
+            {
+                GuiDrawRectangle((Rectangle){scrollRect.x + scrollRect.width - scrollBarWidth, scrollRect.y + 1, scrollBarWidth - 1, scrollRect.height - 2}, 0, WHITE, GetColor(GuiGetStyle(DEFAULT, BASE_COLOR_NORMAL)));
+            }
+
+            uiTop += scrollRect.height + 2;
+            bool lock = !CheckCollisionPointRec(GetMousePosition(), scrollRect) && !GuiIsLocked();
+            if (lock)
+                GuiLock();
+
+            BeginScissorMode(cameraPanelView.x, cameraPanelView.y, cameraPanelView.width, cameraPanelView.height);
+
+            for (int cameraIndex = 0; cameraIndex < cameraCount; ++cameraIndex)
+            {
+                Camera *camera = &scene->cameras[cameraIndex];
+
+                int left = contentRect.x;
+                int right = contentRect.x + contentRect.width;
+
+                {
+                    Rectangle rect = (Rectangle){left, scrollTop, 2 * margin, 2 * margin};
+                    left += rect.width + 2;
+                    if (!GuiIsLocked() && CheckCollisionPointRec(GetMousePosition(), rect))
+                    {
+                        tooltip = "Hide/Show Camera";
+                    }
+
+                    GuiToggle(rect, GuiIconText(camera->hidden ? ICON_EYE_OFF : ICON_EYE_ON, NULL), &camera->hidden);
+
+                }
+                {
+                    Rectangle rect = (Rectangle){left, scrollTop, 2 * margin, 2 * margin};
+                    left += rect.width + 2;
+                    if (!GuiIsLocked() && CheckCollisionPointRec(GetMousePosition(), rect))
+                    {
+                        tooltip = "Projection type: Perspective/Orthographic";
+                    }
+                    bool isPerspective = camera->projectionType == PERSPECTIVE;
+                    GuiToggle(rect, isPerspective ? "Perspective" : "Orthographic", &isPerspective);
+                    camera->projectionType = isPerspective ? PERSPECTIVE : ORTHOGRAPHIC;
+                }
+                {
+                    Rectangle rect = (Rectangle){right - 2 * margin, scrollTop, 2 * margin, 2 * margin};
+                    right -= rect.width + 2;
+
+                    if (!GuiIsLocked() && CheckCollisionPointRec(GetMousePosition(), rect))
+                    {
+                        tooltip = "Delete Camera";
+                    }
+
+                    if (GuiButton(rect, GuiIconText(ICON_BIN, NULL)))
+                    {
+                        arrdel(scene->cameras, cameraIndex);
+                        --cameraCount;
+
+                        if (cameraCount == 0)
+                        {
+                            scene->activeCameraIndex = -1;
+                        }
+                        else if (scene->activeCameraIndex == cameraIndex)
+                        {
+                            scene->activeCameraIndex =
+                                cameraIndex < cameraCount ? cameraIndex : cameraCount - 1;
+                        }
+                        else if (scene->activeCameraIndex > cameraIndex)
+                        {
+                            --scene->activeCameraIndex;
+                        }
+
+                        --cameraIndex;
+                        continue;
+                    }
+                }
+                {
+                    Rectangle rect = (Rectangle){right - 2 * margin, scrollTop, 2 * margin, 2 * margin};
+                    right -= rect.width + 2;
+
+                    if (!GuiIsLocked() && CheckCollisionPointRec(GetMousePosition(), rect))
+                    {
+                        tooltip = "Add Camera";
+                    }
+
+                    if (GuiButton(rect, GuiIconText(ICON_CROSS, NULL)))
+                    {
+                        Camera newCamera = scene->cameras[cameraIndex];
+                        newCamera.hidden = false;
+                        AddCamera(scene, newCamera);
+                        ++cameraCount;
+                        continue;
+                    }
+                }
+                {
+                    const char *label = TextFormat(" Camera %3d", cameraIndex);
+                    Rectangle rect = (Rectangle){left, scrollTop, right - left, 2 * margin};
+
+                    bool hovered = false;
+                    if (!GuiIsLocked() && CheckCollisionPointRec(GetMousePosition(), rect))
+                    {
+                        if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT))
+                        {
+                            if (scene->activeCameraIndex != cameraIndex)
+                            {
+                                scene->activeCameraIndex = cameraIndex;
+                            }
+                            else
+                            {
+                                scene->activeCameraIndex = -1;
+                            }
+                        }
+
+                        hovered = true;
+                    }
+
+                    bool active = cameraIndex == scene->activeCameraIndex;
+
+                    Color backColor = GetColor(GuiGetStyle(DEFAULT, BACKGROUND_COLOR));
+                    Color textColor = GetColor(GuiGetStyle(DEFAULT, TEXT));
+                    int border = 0;
+                    if (active)
+                    {
+                        backColor = GetColor(GuiGetStyle(DEFAULT, BASE_COLOR_PRESSED));
+                        textColor = GetColor(GuiGetStyle(DEFAULT, TEXT_COLOR_PRESSED));
+                    }
+                    else if (hovered)
+                    {
+                        backColor = GetColor(GuiGetStyle(DEFAULT, BASE_COLOR_FOCUSED));
+                        textColor = GetColor(GuiGetStyle(DEFAULT, TEXT_COLOR_FOCUSED));
+                    }
+                    if (hovered)
+                        border = 2;
+
+                    GuiDrawRectangle(rect, border, GetColor(GuiGetStyle(DEFAULT, BORDER_COLOR_FOCUSED)), backColor);
+                    GuiDrawText(label, rect, TEXT_ALIGN_LEFT, textColor);
+                }
+
+                scrollTop += rowHeight + 2;
+            }
+            EndScissorMode();
+
+            if (lock)
+                GuiUnlock();
+        }
+    }
+
     // Global GUI elements that are drawn after all the other stuff (and maybe on top of it).
     // Those elements should also be always responsive, so we always unlock before drawing it.
     GuiUnlock();

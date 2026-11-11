@@ -1138,8 +1138,6 @@ typedef enum {
     ICON_FILETYPE_CODE_PYTHON     = 254,
     ICON_FILETYPE_CODE_JS         = 255,
     ICON_FILETYPE_ICON            = 256,
-    ICON_TRIANGLE                 = 257,
-    ICON_PYRAMID                  = 258,
 } GuiIconName;
 #endif
 

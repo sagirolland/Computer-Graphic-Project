@@ -175,7 +175,7 @@ void RenderScene(Scene *scene, Renderer *renderer, double time) {
         ObjTriangle* triangles = model.triangles;
         
         Mat4 T = M4Diag(1,1,1,1);
-        T.s03 = t.x; T.s13 = t.y; T.s23=t.z;
+        T.s03 = model.position.x; T.s13 = model.position.y; T.s23 = model.position.z;
         Mat4 fromModelToWorld = M4MulM4(T, M4MulM4(model.Rz, M4MulM4(model.Ry, model.Rx)));
 
         float x_max = 0; float x_min = 0;
