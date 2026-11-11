@@ -1001,6 +1001,7 @@ void CreateInterface(RenderSettings *settings, Scene *scene) {
                         ? (float)settings->width / settings->height
                         : 1.f;
                     camera.projectionType = PERSPECTIVE;
+                    camera.up = (Vec3){0,1,0};
                     AddCamera(scene, camera);
                     scene->activeCameraIndex = arrlen(scene->cameras) - 1;
                     cameraCount = arrlen(scene->cameras);

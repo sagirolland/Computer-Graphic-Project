@@ -142,7 +142,7 @@ void RenderScene(Scene *scene, Renderer *renderer, double time) {
     RenderSettings *settings = renderer->settings;
     if(arrlen(scene->cameras)==0) return;
     Camera *camera = &scene->cameras[scene->activeCameraIndex];
-    camera->viewMatrix = M4LookAt(camera->Position, camera->Target,(Vec3){0,0,1});
+    camera->viewMatrix = M4LookAt(camera->Position, camera->Target,camera->up);
     Mat4 fromCameraToScreen = {};
     Mat4 fromWorldToCamera = camera->viewMatrix;
     Vec4 white = {1.f, 1.f, 1.f, 1.f};
