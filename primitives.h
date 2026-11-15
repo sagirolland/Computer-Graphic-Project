@@ -4,7 +4,6 @@
 #include "model.h"
 #include "stb_ds.h"
 
-// TODO(student): Create primitives here
 typedef union triangle
 {
     struct
@@ -36,6 +35,18 @@ struct sphere
     float radius;
 };
 
+//-----------------------Helper Functions---------------------
+
+static void BuildSequentialTriangles(Model *model) {
+    for (int i = 0; i < model->vertexCount; i += 3) {
+        ObjTriangle t = {0};
+        for (int c = 0; c < 3; ++c)
+            t.corners[c] = (Vec3i){ i + c + 1, 0, i + c + 1 };
+        arrput(model->triangles, t);
+    }
+}
+ //--------------------End of Helper Functions------------------
+
 struct Model MakePrimitiveTriangle()
 {
     Model model = {0};
@@ -52,6 +63,7 @@ struct Model MakePrimitiveTriangle()
     {
         model.normals[i] = normal;
     }
+    BuildSequentialTriangles(&model);
     return model;
 }
 struct Model MakePrimitiveCube()
@@ -93,6 +105,7 @@ struct Model MakePrimitiveCube()
         model.normals[i + 2] = normal;
     }
 
+    BuildSequentialTriangles(&model);
     return model;
 }
 static Vec3 SphereNormal(float theta, float phi)
@@ -163,6 +176,7 @@ struct Model MakePrimitiveSphere()
     }
 
     model.vertexCount = arrlen(model.vertices);
+    BuildSequentialTriangles(&model);
     return model;
 }
 struct Model MakePrimitive4SidedPyramid()
@@ -199,6 +213,8 @@ struct Model MakePrimitive4SidedPyramid()
         model.normals[i + 1] = normal;
         model.normals[i + 2] = normal;
     }
+
+    BuildSequentialTriangles(&model);
     return model;
 }
 

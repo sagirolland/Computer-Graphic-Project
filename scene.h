@@ -20,7 +20,6 @@ typedef struct Camera {
     //Vec4 homogeneousBasis[4];
     Mat4 viewMatrix;
     float fov;
-    float aspect;
     ProjectionType projectionType;
     bool hidden;
     // TODO(student)
@@ -54,10 +53,13 @@ Camera DefaultCamera(void);
 #include "stb_ds.h" // For dynamic arrays
 
 void AddModel(Scene *scene, Model model) {
+    model.Rx = model.Ry = model.Rz = M4Identity();
+    model.scale = (Vec3){1,1,1};
     arrput(scene->models, model);
 }
 
 void RemoveModel(Scene *scene, int modelIndex) {
+    FreeModel(&scene->models[modelIndex]); // release its vertex/normal/triangle arrays
     arrdel(scene->models, modelIndex);
 }
 
@@ -77,7 +79,6 @@ Camera DefaultCamera(void) {
         .zBounds = {100.f, 0.1f},  // (far, near)   
         .projectionType = PERSPECTIVE,
         .fov = 1.0472f,             // 60° in radians
-        .aspect = 1.f,
     };
 }
 

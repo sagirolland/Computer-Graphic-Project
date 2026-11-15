@@ -23,6 +23,7 @@ int main()
 {
     SetWindowState(FLAG_WINDOW_RESIZABLE);
     InitWindow(900, 900, "Computer Graphics Demo :)");
+    MaximizeWindow(); // open maximized to fill the monitor (keeps the title bar)
     SetTargetFPS(60);
     
     SetExitKey(-1); // Disable closing the window on escape
@@ -38,10 +39,8 @@ int main()
     
     // Our main structures are Scene, RenderSettings and Renderer, initialized here.
     Scene scene = {};
-    { // TODO(student): Move this to the UI
-        const char *modelPath = TextFormat("%s" PATH_SEPERATOR "models" PATH_SEPERATOR "monkey.obj", GetApplicationDirectory());
-        AddModel(&scene, LoadModelFromObjFile(modelPath));
-    }
+    scene.step = 0.05f;
+    AddCamera(&scene, DefaultCamera());
     
     RenderSettings renderSettings = {};
     renderSettings.tint = (Vec4){.42f, .20f, .47f, 1.f};

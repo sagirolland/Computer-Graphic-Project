@@ -25,6 +25,11 @@ typedef struct Model {
     Mat4 Rz;
     Vec3 scale;
 
+    // Per-model debug drawing toggles
+    bool showBoundingBox;
+    bool showFaceNormals;
+    bool showVertexNormals;
+
     // GPU handles (HW3)
     unsigned int gpuVertexBufferId;
     unsigned int gpuNormalBufferId;

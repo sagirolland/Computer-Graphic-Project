@@ -31,24 +31,27 @@ static Rectangle Box_int(int *value, bool *editMode, bool *dragging, char *textV
     *left += rect.width + 2;
     
     bool mouseInRect = CheckCollisionPointRec(GetMousePosition(), rect);
-    
+    static bool moved = false; // Did the current press actually drag? (only one box drags at a time)
+
     if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
         *editMode = !GuiIsLocked() && mouseInRect;
         *dragging = *editMode;
+        moved = false;
     }
     if (IsKeyReleased(KEY_ENTER)) *editMode = false;
-    
+
     if (*dragging) {
         if (IsMouseButtonDown(MOUSE_BUTTON_LEFT)) {
             Vector2 delta = GetMouseDelta();
-            
+            if (delta.y != 0) moved = true;
+
             if (IsKeyDown(KEY_LEFT_SHIFT)) delta.y *= 10;
             *value -= (int)(delta.y/2.f);
-            
+
             snprintf(textValue, textValueCap, "%i", *value);
         } else {
             *dragging = false;
-            if (!mouseInRect) {
+            if (!mouseInRect || moved) { // a drag shouldn't leave the box in edit mode (keeps WASD usable)
                 *editMode = false;
             }
         }
@@ -72,24 +75,27 @@ static Rectangle Box_float(float *value, bool *editMode, bool *dragging, char *t
     *left += rect.width + 2;
     
     bool mouseInRect = CheckCollisionPointRec(GetMousePosition(), rect);
-    
+    static bool moved = false; // Did the current press actually drag? (only one box drags at a time)
+
     if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
         *editMode = !GuiIsLocked() && mouseInRect;
         *dragging = *editMode;
+        moved = false;
     }
     if (IsKeyReleased(KEY_ENTER)) *editMode = false;
-    
+
     if (*dragging) {
         if (IsMouseButtonDown(MOUSE_BUTTON_LEFT)) {
             Vector2 delta = GetMouseDelta();
-            
+            if (delta.y != 0) moved = true;
+
             if (IsKeyDown(KEY_LEFT_SHIFT)) delta.y *= 10;
             *value -= delta.y*0.01f;
-            
+
             snprintf(textValue, textValueCap, "%2.2f", *value);
         } else {
             *dragging = false;
-            if (!mouseInRect) {
+            if (!mouseInRect || moved) { // a drag shouldn't leave the box in edit mode (keeps WASD usable)
                 *editMode = false;
             }
         }
@@ -179,15 +185,17 @@ static void RotateCameraView(Camera *camera, Vec3 axis, float angle) {
     Vec3 viewDirection = V3Sub(camera->Target, camera->Position);
     if (V3Length(viewDirection) < EPSILON) return;
 
-    camera->Target = V3Add(camera->Position,
-                           M4MulV3(M4Rotate(angle, axis), viewDirection));
+    // Rotate the view direction AND the up vector together, so they never become parallel
+    Mat4 R = M4Rotate(angle, axis);
+    camera->Target = V3Add(camera->Position, M4MulV3(R, viewDirection));
+    camera->up     = M4MulV3(R, camera->up); // pure rotation (no translation), safe for directions
 }
 
 static Vec3 CameraRelativeMovement(Camera *camera, Vec3 movement) {
     Vec3 forward = V3Normalize(V3Sub(camera->Target, camera->Position));
     if (V3Length(forward) < EPSILON) return (Vec3){0};
 
-    Vec3 worldUp = {0.f, 0.f, 1.f};
+    Vec3 worldUp = camera->up;
     Vec3 right = V3Cross(forward, worldUp);
     if (V3Length(right) < EPSILON) right = (Vec3){1.f, 0.f, 0.f};
     right = V3Normalize(right);
@@ -197,61 +205,6 @@ static Vec3 CameraRelativeMovement(Camera *camera, Vec3 movement) {
                         V3Add(V3MulS(up, movement.y), V3MulS(forward, movement.z)));
     if (V3Length(result) > 1.f) result = V3Normalize(result);
     return result;
-}
-
-static bool *modelShowBoundingBox = NULL;
-static bool *modelShowNormals = NULL;
-
-static void DrawModelDebugOverlays(RenderSettings *settings, Scene *scene) {
-    if (settings->renderingMethod != RENDERING_METHOD_SOFTWARE || !settings->showDebugLayer) return;
-
-    int modelCount = arrlen(scene->models);
-    while (arrlen(modelShowBoundingBox) < modelCount) arrput(modelShowBoundingBox, false);
-    while (arrlen(modelShowNormals) < modelCount) arrput(modelShowNormals, false);
-
-    for (int modelIndex = 0; modelIndex < modelCount; ++modelIndex) {
-        Model *model = &scene->models[modelIndex];
-        if (model->hidden || arrlen(model->vertices) == 0) continue;
-
-        if (modelShowBoundingBox[modelIndex]) {
-            float minX = model->vertices[0].x;
-            float maxX = model->vertices[0].x;
-            float minY = model->vertices[0].y;
-            float maxY = model->vertices[0].y;
-
-            for (int i = 1; i < arrlen(model->vertices); ++i) {
-                minX = MIN(minX, model->vertices[i].x);
-                maxX = MAX(maxX, model->vertices[i].x);
-                minY = MIN(minY, model->vertices[i].y);
-                maxY = MAX(maxY, model->vertices[i].y);
-            }
-
-            Vector2 topLeft = { (minX + 1.f)*settings->width/2.f, (minY + 1.f)*settings->width/2.f };
-            Vector2 topRight = { (maxX + 1.f)*settings->width/2.f, (minY + 1.f)*settings->width/2.f };
-            Vector2 bottomRight = { (maxX + 1.f)*settings->width/2.f, (maxY + 1.f)*settings->width/2.f };
-            Vector2 bottomLeft = { (minX + 1.f)*settings->width/2.f, (maxY + 1.f)*settings->width/2.f };
-            DrawLineEx(topLeft, topRight, 2.f, GREEN);
-            DrawLineEx(topRight, bottomRight, 2.f, GREEN);
-            DrawLineEx(bottomRight, bottomLeft, 2.f, GREEN);
-            DrawLineEx(bottomLeft, topLeft, 2.f, GREEN);
-        }
-
-        if (modelShowNormals[modelIndex]) {
-            int normalCount = arrlen(model->normals);
-            for (int i = 0; i + 2 < arrlen(model->vertices) && i + 2 < normalCount; i += 3) {
-                Vec3 center = V3MulS(V3Add(
-                    V3Add(model->vertices[i], model->vertices[i + 1]),
-                    model->vertices[i + 2]), 1.f/3.f);
-                Vec3 normal = V3Normalize(V3Add(
-                    V3Add(model->normals[i], model->normals[i + 1]),
-                    model->normals[i + 2]));
-                Vector2 start = { (center.x + 1.f)*settings->width/2.f, (center.y + 1.f)*settings->width/2.f };
-                Vec3 normalEnd = V3Add(center, V3MulS(normal, 0.1f));
-                Vector2 end = { (normalEnd.x + 1.f)*settings->width/2.f, (normalEnd.y + 1.f)*settings->width/2.f };
-                DrawLineEx(start, end, 2.f, RED);
-            }
-        }
-    }
 }
 
 static void Tooltip(const char *label, int x, int y) {
@@ -282,6 +235,9 @@ void CreateInterface(RenderSettings *settings, Scene *scene) {
     static int colorPickerX = 0, colorPickerY = 0;
     
     static int activeBoxId = -1;
+
+    // What WASD/arrows/mouse-drag control. Only one at a time; camera by default.
+    static enum { KB_NONE, KB_MODEL, KB_CAMERA } kbTarget = KB_CAMERA;
     int boxCounter = 0;
     bool activateBox = false;
     
@@ -314,8 +270,7 @@ void CreateInterface(RenderSettings *settings, Scene *scene) {
     // See raygui.h, specifically GuiIconName enum to see what icons are available
     const char *label = GuiIconText(showInterface ? ICON_EYE_ON : ICON_EYE_OFF, NULL);
     GuiToggle((Rectangle) {0, 0, 20, 20}, label, &showInterface);
-    
-    DrawModelDebugOverlays(settings, scene);
+
     if (!showInterface) return;
     
     const char *tooltip = NULL;
@@ -401,7 +356,17 @@ void CreateInterface(RenderSettings *settings, Scene *scene) {
             
             GuiToggle(rect, GuiIconText(ICON_LAYERS2, NULL), &settings->showDebugLayer);
         }
-        
+        {
+            Rectangle rect = (Rectangle) { left, uiTop, iconButtonSize, iconButtonSize };
+            left += iconButtonSize + 2;
+
+            if (!GuiIsLocked() && CheckCollisionPointRec(GetMousePosition(), rect)) {
+                tooltip = settings->showCameraWidgets ? "Hide camera widgets" : "Show camera widgets";
+            }
+
+            GuiToggle(rect, GuiIconText(ICON_CAMERA, NULL), &settings->showCameraWidgets);
+        }
+
         BOX_FLOAT(&scene->step, &left, uiTop + 4, "Set the step size when moving with WASD");
         BOX_INT(&settings->problemX, &left, uiTop + 4, "Problem Pixel X");
         BOX_INT(&settings->problemY, &left, uiTop + 4, "Problem Pixel Y");
@@ -415,14 +380,6 @@ void CreateInterface(RenderSettings *settings, Scene *scene) {
         
         GuiLine((Rectangle) { uiLeft + margin, uiTop + margin, uiWidth - margin*2, 0 }, "Model Controls");
         uiTop += 2*margin;
-    }
-    static bool showCameraControls = true;
-    {
-        Rectangle rect = (Rectangle){uiLeft - margin / 2, uiTop + margin / 2, margin, margin};
-        GuiCheckBox(rect, NULL, &showCameraControls);
-
-        GuiLine((Rectangle){uiLeft + margin, uiTop + margin, uiWidth - margin * 2, 0}, "Camera Controls");
-        uiTop += 2 * margin;
     }
     if (showModelControls) {
         {
@@ -449,8 +406,10 @@ void CreateInterface(RenderSettings *settings, Scene *scene) {
                     tooltip = "Control active model with keyboard";
                 }
                 
-                static bool value = false;
+                bool value = (kbTarget == KB_MODEL);
                 GuiToggle(rect, GuiIconText(ICON_PLAYER, NULL), &value);
+                if (value) kbTarget = KB_MODEL;                    // turning it on takes control from the camera
+                else if (kbTarget == KB_MODEL) kbTarget = KB_NONE; // turning it off releases control
                 static bool moveModelRelativeToCamera = false;
                 rect = (Rectangle){right - iconButtonSize - 66, uiTop, 64, iconButtonSize};
                 if (!GuiIsLocked() && CheckCollisionPointRec(GetMousePosition(), rect)) {
@@ -472,17 +431,40 @@ void CreateInterface(RenderSettings *settings, Scene *scene) {
                     if (IsKeyDown(KEY_Q)) movement.y += scene->step;
                     if (IsKeyDown(KEY_E)) movement.y -= scene->step;
 
-                    bool cameraRelativeMovement = false;
                     if (moveModelRelativeToCamera &&
                         0 <= scene->activeCameraIndex &&
                         scene->activeCameraIndex < arrlen(scene->cameras)) {
                         movement = CameraRelativeMovement(
                             &scene->cameras[scene->activeCameraIndex], movement);
-                        cameraRelativeMovement = true;
                     }
-                    m->position = cameraRelativeMovement
-                        ? V3Sub(m->position, movement)
-                        : V3Add(m->position, movement);
+                    m->position = V3Add(m->position, movement);
+
+                    // Left mouse drag rotates ONLY the active model. Starts only if the click began
+                    // outside the control panel (and the eye button), same as the camera rotation.
+                    static bool modelMouseRotating = false;
+                    if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
+                        Vector2 mouse = GetMousePosition();
+                        modelMouseRotating = !CheckCollisionPointRec(mouse, uiRect) &&
+                                             !CheckCollisionPointRec(mouse, (Rectangle){0, 0, 20, 20});
+                    }
+                    if (!IsMouseButtonDown(MOUSE_BUTTON_LEFT)) modelMouseRotating = false;
+                    if (modelMouseRotating) {
+                        // Rotate around the active camera's up/right axes so the drag matches what you see
+                        // (falls back to world Y/X if there's no active camera)
+                        Vec3 up = {0.f, 1.f, 0.f}, right = {1.f, 0.f, 0.f};
+                        if (0 <= scene->activeCameraIndex && scene->activeCameraIndex < arrlen(scene->cameras)) {
+                            Camera *cam = &scene->cameras[scene->activeCameraIndex];
+                            Vec3 fwd = V3Normalize(V3Sub(cam->Target, cam->Position));
+                            right = V3Normalize(V3Cross(fwd, cam->up));
+                            up    = V3Normalize(V3Cross(right, fwd));
+                        }
+                        Vector2 d = GetMouseDelta();
+                        float sens = 0.01f; // radians per pixel
+                        // Rz is the outermost factor of T*Rz*Ry*Rx, so pre-multiplying it applies a
+                        // world-space rotation to the whole model (around its own position)
+                        RotateModelAxis(&m->Rz, up,    d.x * sens); // drag right -> turns right
+                        RotateModelAxis(&m->Rz, right, d.y * sens); // drag down  -> tilts down
+                    }
                 }
             }
             
@@ -524,7 +506,7 @@ void CreateInterface(RenderSettings *settings, Scene *scene) {
                 {
                     tooltip = "Add Triangle";
                 }
-                if (GuiButton(rect, GuiIconText(ICON_CROSS_SMALL, NULL)))
+                if (GuiButton(rect, "Tri"))
                 {
                     // TODO(student)DONE
                     Model primitive = MakePrimitiveTriangle();
@@ -539,7 +521,7 @@ void CreateInterface(RenderSettings *settings, Scene *scene) {
                 {
                     tooltip = "Add Pyramid";
                 }
-                if (GuiButton(rect, GuiIconText(ICON_CROSS_SMALL, NULL)))
+                if (GuiButton(rect, "Pyr"))
                 {
                     // TODO(student)DONE
                     Model primitive = MakePrimitive4SidedPyramid();
@@ -582,6 +564,23 @@ void CreateInterface(RenderSettings *settings, Scene *scene) {
                 BOX_FLOAT(&activeModel->position.y, &left, uiTop, "Drag vertically to edit the Y position");
                 BOX_FLOAT(&activeModel->position.z, &left, uiTop, "Drag vertically to edit the Z position");
             }
+            uiTop += rowHeight + 2;
+            {
+                const char *label = "scale: ";
+                left = uiLeft + margin;
+                Rectangle rect = (Rectangle) { left, uiTop, 100, 16 };
+                GuiDrawText(label, rect, TEXT_ALIGN_LEFT, GetColor(GuiGetStyle(DEFAULT, TEXT)));
+                left += rect.width + 2;
+
+                BOX_FLOAT(&activeModel->scale.x, &left, uiTop, "Drag vertically to scale along X");
+                BOX_FLOAT(&activeModel->scale.y, &left, uiTop, "Drag vertically to scale along Y");
+                BOX_FLOAT(&activeModel->scale.z, &left, uiTop, "Drag vertically to scale along Z");
+                // Never 0 (or negative): that would flatten the model and make the normal matrix singular
+                activeModel->scale.x = MAX(activeModel->scale.x, 0.01f);
+                activeModel->scale.y = MAX(activeModel->scale.y, 0.01f);
+                activeModel->scale.z = MAX(activeModel->scale.z, 0.01f);
+            }
+            uiTop += rowHeight + 2;
             // TODO(student) ...DONE ROTATION
             {
                 static float rotationDegrees = 90.f;
@@ -640,9 +639,7 @@ void CreateInterface(RenderSettings *settings, Scene *scene) {
             int rowHeight = 2*margin;
             int itemCount = 6;
             int modelCount = arrlen(scene->models);
-            while (arrlen(modelShowBoundingBox) < modelCount) arrput(modelShowBoundingBox, false);
-            while (arrlen(modelShowNormals) < modelCount) arrput(modelShowNormals, false);
-            
+
             static Rectangle modelPanelView = { 0 };
             Rectangle scrollRect = (Rectangle) { uiLeft - 1, uiTop - 1, uiWidth - 2*margin + 2, itemCount*(rowHeight + 2) };
             Rectangle contentRect = scrollRect;
@@ -690,12 +687,11 @@ void CreateInterface(RenderSettings *settings, Scene *scene) {
                     
                     if (GuiButton(rect, GuiIconText(ICON_BIN, NULL))) {
                         RemoveModel(scene, modelIndex);
-                        arrdel(modelShowBoundingBox, modelIndex);
-                        arrdel(modelShowNormals, modelIndex);
                         if (scene->activeModelIndex >= modelIndex) scene->activeModelIndex -= 1;
                         --modelCount;
-                        --modelIndex;
-                        continue;
+                        // Stop here: the next model's delete button would sit at the same spot and also
+                        // fire this frame (the mouse release is still active), deleting everything.
+                        break;
                     }
                 }
                 // TODO(student)DONE Add buttons to show/hide bounding box and normals for each model
@@ -707,17 +703,27 @@ void CreateInterface(RenderSettings *settings, Scene *scene) {
                         tooltip = "Show/Hide Bounding Box";
                     }
 
-                    GuiToggle(rect, GuiIconText(ICON_BOX, NULL), &modelShowBoundingBox[modelIndex]);
+                    GuiToggle(rect, GuiIconText(ICON_BOX, NULL), &model->showBoundingBox);
                 }
                 {
                     Rectangle rect = (Rectangle) { right - 2*margin, scrollTop, 2*margin, 2*margin };
                     right -= rect.width + 2;
 
                     if (!GuiIsLocked() && CheckCollisionPointRec(GetMousePosition(), rect)) {
-                        tooltip = "Show/Hide Normals";
+                        tooltip = "Show/Hide Face Normals";
                     }
 
-                    GuiToggle(rect, GuiIconText(ICON_ARROW_UP, NULL), &modelShowNormals[modelIndex]);
+                    GuiToggle(rect, GuiIconText(ICON_ARROW_UP, NULL), &model->showFaceNormals);
+                }
+                {
+                    Rectangle rect = (Rectangle) { right - 2*margin, scrollTop, 2*margin, 2*margin };
+                    right -= rect.width + 2;
+
+                    if (!GuiIsLocked() && CheckCollisionPointRec(GetMousePosition(), rect)) {
+                        tooltip = "Show/Hide Vertex Normals";
+                    }
+
+                    GuiToggle(rect, GuiIconText(ICON_ARROW_UP_FILL, NULL), &model->showVertexNormals);
                 }
                 
                 {
@@ -762,9 +768,18 @@ void CreateInterface(RenderSettings *settings, Scene *scene) {
             if (lock) GuiUnlock();
         }
     }
+    // Camera section header (drawn after the model section so they don't overlap)
+    static bool showCameraControls = true;
+    {
+        uiTop += margin; // spacing after the model section
+        Rectangle rect = (Rectangle){uiLeft - margin / 2, uiTop + margin / 2, margin, margin};
+        GuiCheckBox(rect, NULL, &showCameraControls);
+
+        GuiLine((Rectangle){uiLeft + margin, uiTop + margin, uiWidth - margin * 2, 0}, "Camera Controls");
+        uiTop += 2 * margin;
+    }
     if (showCameraControls)
     {
-        uiTop += 2 * margin + margin;
 
         {
             int right = uiRect.x + uiRect.width - margin;
@@ -774,8 +789,10 @@ void CreateInterface(RenderSettings *settings, Scene *scene) {
                 tooltip = "Control active camera with keyboard";
             }
 
-            static bool controlActiveCameraWithKeyboard = false;
+            bool controlActiveCameraWithKeyboard = (kbTarget == KB_CAMERA);
             GuiToggle(rect, GuiIconText(ICON_PLAYER, NULL), &controlActiveCameraWithKeyboard);
+            if (controlActiveCameraWithKeyboard) kbTarget = KB_CAMERA;  // turning it on takes control from the model
+            else if (kbTarget == KB_CAMERA) kbTarget = KB_NONE;          // turning it off releases control
             static bool moveCameraRelativeToView = false;
             rect = (Rectangle){right - iconButtonSize - 66, uiTop, 64, iconButtonSize};
             if (!GuiIsLocked() && CheckCollisionPointRec(GetMousePosition(), rect)) {
@@ -801,6 +818,33 @@ void CreateInterface(RenderSettings *settings, Scene *scene) {
                 }
                 camera->Position = V3Add(camera->Position, movement);
                 camera->Target = V3Add(camera->Target, movement);
+
+                // Rotation around the camera's own axes: yaw around 'up', pitch around 'right'
+                Vec3 fwd   = V3Normalize(V3Sub(camera->Target, camera->Position));
+                Vec3 right = V3Normalize(V3Cross(fwd, camera->up));
+
+                // Arrow keys
+                float rot = 0.03f; // radians per frame (~1.8 deg)
+                if (IsKeyDown(KEY_LEFT))  RotateCameraView(camera, camera->up,  rot);
+                if (IsKeyDown(KEY_RIGHT)) RotateCameraView(camera, camera->up, -rot);
+                if (IsKeyDown(KEY_UP))    RotateCameraView(camera, right,  rot);
+                if (IsKeyDown(KEY_DOWN))  RotateCameraView(camera, right, -rot);
+
+                // Left mouse drag. Only starts if the click began outside the control panel
+                // (and outside the show/hide-interface eye button), so UI drags never rotate.
+                static bool mouseRotating = false;
+                if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
+                    Vector2 mouse = GetMousePosition();
+                    mouseRotating = !CheckCollisionPointRec(mouse, uiRect) &&
+                                    !CheckCollisionPointRec(mouse, (Rectangle){0, 0, 20, 20});
+                }
+                if (!IsMouseButtonDown(MOUSE_BUTTON_LEFT)) mouseRotating = false;
+                if (mouseRotating) {
+                    Vector2 d = GetMouseDelta();
+                    float sens = 0.005f; // radians per pixel
+                    RotateCameraView(camera, camera->up, -d.x * sens); // yaw
+                    RotateCameraView(camera, right,      -d.y * sens); // pitch
+                }
             }
         }
 
@@ -867,15 +911,7 @@ void CreateInterface(RenderSettings *settings, Scene *scene) {
                         BOX_FLOAT(&activeCamera->fov, &fieldLeft, uiTop,
                                   "Field of view in radians");
 
-                        rect.y += rowHeight;
-                        GuiDrawText("Aspect:", rect, TEXT_ALIGN_LEFT,
-                                    GetColor(GuiGetStyle(DEFAULT, TEXT)));
-
-                        fieldLeft = rect.x + rect.width + 2;
-                        BOX_FLOAT(&activeCamera->aspect, &fieldLeft, uiTop + rowHeight,
-                                  "Image width divided by height");
-
-                        projectionRows = 2;
+                        projectionRows = 1;
                     }
                     else
                     {
@@ -954,7 +990,7 @@ void CreateInterface(RenderSettings *settings, Scene *scene) {
                                          scene->activeModelIndex < arrlen(scene->models);
                     if (GuiButton(rect, "Focus Model") && hasActiveModel) {
                         Model *model = &scene->models[scene->activeModelIndex];
-                        activeCamera->Target = V3Neg(model->position);
+                        activeCamera->Target = model->position;
                     }
                 }
             uiTop += rowHeight;
@@ -987,24 +1023,27 @@ void CreateInterface(RenderSettings *settings, Scene *scene) {
             int itemCount = 6;
             int cameraCount = arrlen(scene->cameras);
 
-            if (cameraCount == 0) {
+            { // Always-visible "Add Camera" button
                 Rectangle rect = (Rectangle){uiLeft + margin, uiTop, 100, 2 * margin};
                 if (GuiButton(rect, "Add Camera")) {
-                    Camera camera = {0};
-                    camera.Position = (Vec3){0.f, -5.f, 2.f};
-                    camera.Target = (Vec3){0.f, 0.f, 0.f};
-                    camera.xBounds = (Vec2){-1.f, 1.f};
-                    camera.yBounds = (Vec2){-1.f, 1.f};
-                    camera.zBounds = (Vec2){100.f, 0.1f};
-                    camera.fov = 1.0471975512f;
-                    camera.aspect = settings->height > 0
-                        ? (float)settings->width / settings->height
-                        : 1.f;
-                    camera.projectionType = PERSPECTIVE;
-                    camera.up = (Vec3){0,1,0};
+                    bool hasActive = 0 <= scene->activeCameraIndex && scene->activeCameraIndex < cameraCount;
+                    Camera camera;
+                    if (hasActive) {
+                        // Copy the active camera and shift it 2 units to its right, so its widget is visible
+                        camera = scene->cameras[scene->activeCameraIndex];
+                        Vec3 fwd   = V3Normalize(V3Sub(camera.Target, camera.Position));
+                        Vec3 right = V3Normalize(V3Cross(fwd, camera.up));
+                        Vec3 offset = V3MulS(right, 2.f);
+                        camera.Position = V3Add(camera.Position, offset);
+                        camera.Target   = V3Add(camera.Target, offset);
+                        camera.hidden = false;
+                    } else {
+                        camera = DefaultCamera();
+                    }
                     AddCamera(scene, camera);
-                    scene->activeCameraIndex = arrlen(scene->cameras) - 1;
                     cameraCount = arrlen(scene->cameras);
+                    // Keep the current view; only make the new camera active if nothing was active
+                    if (!hasActive) scene->activeCameraIndex = cameraCount - 1;
                 }
                 uiTop += 2 * margin + 2;
             }
@@ -1059,7 +1098,7 @@ void CreateInterface(RenderSettings *settings, Scene *scene) {
                         tooltip = "Projection type: Perspective/Orthographic";
                     }
                     bool isPerspective = camera->projectionType == PERSPECTIVE;
-                    GuiToggle(rect, isPerspective ? "Perspective" : "Orthographic", &isPerspective);
+                    GuiToggle(rect, isPerspective ? "P" : "O", &isPerspective); // short label: full name is in the tooltip
                     camera->projectionType = isPerspective ? PERSPECTIVE : ORTHOGRAPHIC;
                 }
                 {
@@ -1090,26 +1129,9 @@ void CreateInterface(RenderSettings *settings, Scene *scene) {
                             --scene->activeCameraIndex;
                         }
 
-                        --cameraIndex;
-                        continue;
-                    }
-                }
-                {
-                    Rectangle rect = (Rectangle){right - 2 * margin, scrollTop, 2 * margin, 2 * margin};
-                    right -= rect.width + 2;
-
-                    if (!GuiIsLocked() && CheckCollisionPointRec(GetMousePosition(), rect))
-                    {
-                        tooltip = "Add Camera";
-                    }
-
-                    if (GuiButton(rect, GuiIconText(ICON_CROSS, NULL)))
-                    {
-                        Camera newCamera = scene->cameras[cameraIndex];
-                        newCamera.hidden = false;
-                        AddCamera(scene, newCamera);
-                        ++cameraCount;
-                        continue;
+                        // Stop here: the next camera's delete button would sit at the same spot and also
+                        // fire this frame (the mouse release is still active), deleting everything.
+                        break;
                     }
                 }
                 {
