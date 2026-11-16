@@ -207,6 +207,157 @@ static Vec3 CameraRelativeMovement(Camera *camera, Vec3 movement) {
     return result;
 }
 
+static void OrbitCamera(Camera *camera, float yaw, float pitch) {
+    Vec3 offset = V3Sub(camera->Position, camera->Target);
+    if (V3Length(offset) < EPSILON) return;
+
+    Vec3 up = V3Normalize(camera->up);
+    if (V3Length(up) < EPSILON) up = (Vec3){0.f, 1.f, 0.f};
+
+    Mat4 rotation = M4Rotate(yaw, up);
+    offset = M4MulV3(rotation, offset);
+    up = V3Normalize(M4MulV3(rotation, up));
+
+    Vec3 forward = V3Normalize(V3MulS(offset, -1.f));
+    Vec3 right = V3Normalize(V3Cross(forward, up));
+    if (V3Length(right) < EPSILON) return;
+
+    float currentPitch = asinf(CLAMP(V3Dot(forward, up), -1.f, 1.f));
+    float targetPitch = CLAMP(currentPitch + pitch, -1.5533f, 1.5533f);
+    rotation = M4Rotate(targetPitch - currentPitch, right);
+    offset = M4MulV3(rotation, offset);
+    up = V3Normalize(M4MulV3(rotation, up));
+
+    camera->Position = V3Add(camera->Target, offset);
+    camera->up = up;
+}
+
+static void PanCamera(Camera *camera, float deltaX, float deltaY, int viewportHeight) {
+    Vec3 forward = V3Normalize(V3Sub(camera->Target, camera->Position));
+    Vec3 right = V3Normalize(V3Cross(forward, camera->up));
+    if (V3Length(right) < EPSILON || viewportHeight <= 0) return;
+    Vec3 up = V3Normalize(V3Cross(right, forward));
+
+    float worldPerPixel;
+    if (camera->projectionType == PERSPECTIVE) {
+        float distance = V3Length(V3Sub(camera->Target, camera->Position));
+        float fov = CLAMP(camera->fov, 0.0873f, 2.9671f);
+        worldPerPixel = 2.f * distance * tanf(fov * 0.5f) / viewportHeight;
+    } else {
+        worldPerPixel = (camera->yBounds.y - camera->yBounds.x) / viewportHeight;
+    }
+
+    Vec3 movement = V3Add(V3MulS(right, -deltaX * worldPerPixel),
+                          V3MulS(up, deltaY * worldPerPixel));
+    camera->Position = V3Add(camera->Position, movement);
+    camera->Target = V3Add(camera->Target, movement);
+}
+
+static void ZoomCamera(Camera *camera, float wheel) {
+    if (wheel == 0.f) return;
+
+    float factor = powf(0.9f, wheel);
+    if (camera->projectionType == PERSPECTIVE) {
+        Vec3 offset = V3Sub(camera->Position, camera->Target);
+        float distance = V3Length(offset);
+        if (distance < EPSILON) return;
+        distance = CLAMP(distance * factor, 0.01f, 100000.f);
+        camera->Position = V3Add(camera->Target, V3MulS(V3Normalize(offset), distance));
+    } else {
+        float centerX = (camera->xBounds.x + camera->xBounds.y) * 0.5f;
+        float centerY = (camera->yBounds.x + camera->yBounds.y) * 0.5f;
+        float halfWidth = CLAMP((camera->xBounds.y - camera->xBounds.x) * 0.5f * factor, 0.005f, 100000.f);
+        float halfHeight = CLAMP((camera->yBounds.y - camera->yBounds.x) * 0.5f * factor, 0.005f, 100000.f);
+        camera->xBounds = (Vec2){centerX - halfWidth, centerX + halfWidth};
+        camera->yBounds = (Vec2){centerY - halfHeight, centerY + halfHeight};
+    }
+}
+
+static bool FrameCameraOnModel(Camera *camera, const Model *model) {
+    int vertexCount = arrlen(model->vertices);
+    if (vertexCount == 0) return false;
+
+    Mat4 translation = M4Identity();
+    translation.s03 = model->position.x;
+    translation.s13 = model->position.y;
+    translation.s23 = model->position.z;
+    Mat4 rotationX = M4Eq(model->Rx, (Mat4){0}) ? M4Identity() : model->Rx;
+    Mat4 rotationY = M4Eq(model->Ry, (Mat4){0}) ? M4Identity() : model->Ry;
+    Mat4 rotationZ = M4Eq(model->Rz, (Mat4){0}) ? M4Identity() : model->Rz;
+    Mat4 modelToWorld = M4MulM4(translation,
+        M4MulM4(rotationZ,
+        M4MulM4(rotationY,
+        M4MulM4(rotationX, M4ScaleV3(model->scale)))));
+
+    Vec3 first = M4MulV3(modelToWorld, model->vertices[0]);
+    Vec3 minimum = first;
+    Vec3 maximum = first;
+    for (int i = 1; i < vertexCount; ++i) {
+        Vec3 vertex = M4MulV3(modelToWorld, model->vertices[i]);
+        minimum.x = MIN(minimum.x, vertex.x);
+        minimum.y = MIN(minimum.y, vertex.y);
+        minimum.z = MIN(minimum.z, vertex.z);
+        maximum.x = MAX(maximum.x, vertex.x);
+        maximum.y = MAX(maximum.y, vertex.y);
+        maximum.z = MAX(maximum.z, vertex.z);
+    }
+
+    Vec3 center = V3MulS(V3Add(minimum, maximum), 0.5f);
+    float radius = 0.f;
+    for (int i = 0; i < vertexCount; ++i) {
+        Vec3 vertex = M4MulV3(modelToWorld, model->vertices[i]);
+        radius = MAX(radius, V3Length(V3Sub(vertex, center)));
+    }
+    radius = MAX(radius, 0.01f);
+
+    Vec3 forward = V3Normalize(V3Sub(camera->Target, camera->Position));
+    if (V3Length(forward) < EPSILON) forward = (Vec3){0.f, 0.f, -1.f};
+
+    float distance;
+    if (camera->projectionType == PERSPECTIVE) {
+        float fov = CLAMP(camera->fov, 0.0873f, 2.9671f);
+        distance = radius * 1.2f / sinf(fov * 0.5f);
+    } else {
+        float halfExtent = radius * 1.2f;
+        camera->xBounds = (Vec2){-halfExtent, halfExtent};
+        camera->yBounds = (Vec2){-halfExtent, halfExtent};
+        distance = radius * 2.f;
+    }
+
+    camera->Target = center;
+    camera->Position = V3Sub(center, V3MulS(forward, distance));
+    camera->zBounds.y = MIN(camera->zBounds.y > 0.f ? camera->zBounds.y : 0.1f,
+                            MAX(0.005f, (distance - radius) * 0.5f));
+    camera->zBounds.x = MAX(camera->zBounds.x, distance + radius * 2.f);
+    return true;
+}
+
+static void DrawCameraOrientationGizmo(Camera *camera, int x, int y) {
+    Vec3 forward = V3Normalize(V3Sub(camera->Target, camera->Position));
+    Vec3 right = V3Normalize(V3Cross(forward, camera->up));
+    if (V3Length(right) < EPSILON) return;
+    Vec3 up = V3Normalize(V3Cross(right, forward));
+
+    DrawCircle(x, y, 30.f, (Color){20, 24, 32, 220});
+    DrawCircleLines(x, y, 30.f, (Color){110, 120, 132, 255});
+
+    const Vec3 axes[] = {{1.f, 0.f, 0.f}, {0.f, 1.f, 0.f}, {0.f, 0.f, 1.f}};
+    const char *labels[] = {"X", "Y", "Z"};
+    const Color colors[] = {
+        (Color){235, 90, 90, 255},
+        (Color){100, 220, 130, 255},
+        (Color){100, 160, 255, 255}
+    };
+    for (int i = 0; i < 3; ++i) {
+        float screenX = V3Dot(axes[i], right);
+        float screenY = -V3Dot(axes[i], up);
+        Vector2 end = {(float)x + screenX * 22.f, (float)y + screenY * 22.f};
+        DrawLineEx((Vector2){(float)x, (float)y}, end, 2.f, colors[i]);
+        DrawCircle((int)end.x, (int)end.y, 3.f, colors[i]);
+        DrawText(labels[i], (int)end.x + 3, (int)end.y - 5, 10, colors[i]);
+    }
+}
+
 static void Tooltip(const char *label, int x, int y) {
     GuiSetTooltip(label);
     GuiEnableTooltip();
@@ -228,7 +379,7 @@ void CreateInterface(RenderSettings *settings, Scene *scene) {
     static bool showInterface = true;
     
     // File dialog should lock all other UI elements if it's active, so we need to initialize it first
-    static GuiWindowFileDialogState fileDialogState = {};
+    static GuiWindowFileDialogState fileDialogState = {0};
     static FileDialogOperaion fileDialogOperation = -1;
     
     static Vec4 *colorPickerValue = NULL;
@@ -261,6 +412,14 @@ void CreateInterface(RenderSettings *settings, Scene *scene) {
             // Not currently editing a UI box, handle scene related key bindings
             if (IsKeyPressed(KEY_GRAVE)) {
                 showInterface = !showInterface;
+            }
+            if (IsKeyPressed(KEY_F) &&
+                0 <= scene->activeCameraIndex &&
+                scene->activeCameraIndex < arrlen(scene->cameras) &&
+                0 <= scene->activeModelIndex &&
+                scene->activeModelIndex < arrlen(scene->models)) {
+                FrameCameraOnModel(&scene->cameras[scene->activeCameraIndex],
+                                   &scene->models[scene->activeModelIndex]);
             }
         } else {
             GuiLock();
@@ -532,7 +691,7 @@ void CreateInterface(RenderSettings *settings, Scene *scene) {
         uiTop += 2*margin + margin;
         
         { // Transform controls for the active model
-            Model dummyModel = {};
+            Model dummyModel = {0};
             Model *activeModel = NULL;
             static bool lock = false;
             
@@ -778,6 +937,42 @@ void CreateInterface(RenderSettings *settings, Scene *scene) {
         GuiLine((Rectangle){uiLeft + margin, uiTop + margin, uiWidth - margin * 2, 0}, "Camera Controls");
         uiTop += 2 * margin;
     }
+
+    if (!GuiIsLocked() &&
+        0 <= scene->activeCameraIndex &&
+        scene->activeCameraIndex < arrlen(scene->cameras)) {
+        Camera *camera = &scene->cameras[scene->activeCameraIndex];
+        static bool mouseOrbiting = false;
+        static bool mousePanning = false;
+        Vector2 mouse = GetMousePosition();
+        bool mouseOverViewport = !CheckCollisionPointRec(mouse, uiRect) &&
+                                 !CheckCollisionPointRec(mouse, (Rectangle){0, 0, 20, 20});
+        if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
+            mouseOrbiting = mouseOverViewport && kbTarget != KB_MODEL;
+        }
+        if (IsMouseButtonPressed(MOUSE_BUTTON_RIGHT) ||
+            IsMouseButtonPressed(MOUSE_BUTTON_MIDDLE)) {
+            mousePanning = mouseOverViewport;
+        }
+        if (!IsMouseButtonDown(MOUSE_BUTTON_LEFT)) mouseOrbiting = false;
+        if (!IsMouseButtonDown(MOUSE_BUTTON_RIGHT) &&
+            !IsMouseButtonDown(MOUSE_BUTTON_MIDDLE)) mousePanning = false;
+
+        if (mouseOrbiting && IsMouseButtonDown(MOUSE_BUTTON_LEFT)) {
+            Vector2 d = GetMouseDelta();
+            float sens = 0.005f;
+            OrbitCamera(camera, d.x * sens, -d.y * sens);
+        }
+        if (mousePanning && (IsMouseButtonDown(MOUSE_BUTTON_RIGHT) ||
+                             IsMouseButtonDown(MOUSE_BUTTON_MIDDLE))) {
+            Vector2 d = GetMouseDelta();
+            PanCamera(camera, d.x, d.y, GetScreenHeight());
+        }
+        if (mouseOverViewport) {
+            ZoomCamera(camera, GetMouseWheelMove());
+        }
+    }
+
     if (showCameraControls)
     {
 
@@ -801,55 +996,41 @@ void CreateInterface(RenderSettings *settings, Scene *scene) {
             GuiToggle(rect, moveCameraRelativeToView ? "View" : "World",
                       &moveCameraRelativeToView);
 
-            if (controlActiveCameraWithKeyboard &&
-                !GuiIsLocked() &&
+            if (!GuiIsLocked() &&
                 0 <= scene->activeCameraIndex &&
                 scene->activeCameraIndex < arrlen(scene->cameras)) {
                 Camera *camera = &scene->cameras[scene->activeCameraIndex];
-                Vec3 movement = {0};
-                if (IsKeyDown(KEY_W)) movement.z += scene->step;
-                if (IsKeyDown(KEY_S)) movement.z -= scene->step;
-                if (IsKeyDown(KEY_A)) movement.x -= scene->step;
-                if (IsKeyDown(KEY_D)) movement.x += scene->step;
-                if (IsKeyDown(KEY_Q)) movement.y += scene->step;
-                if (IsKeyDown(KEY_E)) movement.y -= scene->step;
-                if (moveCameraRelativeToView) {
-                    movement = CameraRelativeMovement(camera, movement);
-                }
-                camera->Position = V3Add(camera->Position, movement);
-                camera->Target = V3Add(camera->Target, movement);
+                if (controlActiveCameraWithKeyboard) {
+                    Vec3 movement = {0};
+                    if (IsKeyDown(KEY_W)) movement.z += scene->step;
+                    if (IsKeyDown(KEY_S)) movement.z -= scene->step;
+                    if (IsKeyDown(KEY_A)) movement.x -= scene->step;
+                    if (IsKeyDown(KEY_D)) movement.x += scene->step;
+                    if (IsKeyDown(KEY_Q)) movement.y += scene->step;
+                    if (IsKeyDown(KEY_E)) movement.y -= scene->step;
+                    if (moveCameraRelativeToView) {
+                        movement = CameraRelativeMovement(camera, movement);
+                    }
+                    camera->Position = V3Add(camera->Position, movement);
+                    camera->Target = V3Add(camera->Target, movement);
 
-                // Rotation around the camera's own axes: yaw around 'up', pitch around 'right'
-                Vec3 fwd   = V3Normalize(V3Sub(camera->Target, camera->Position));
-                Vec3 right = V3Normalize(V3Cross(fwd, camera->up));
+                    // Rotation around the camera's own axes: yaw around 'up', pitch around 'right'
+                    Vec3 fwd   = V3Normalize(V3Sub(camera->Target, camera->Position));
+                    Vec3 right = V3Normalize(V3Cross(fwd, camera->up));
 
-                // Arrow keys
-                float rot = 0.03f; // radians per frame (~1.8 deg)
-                if (IsKeyDown(KEY_LEFT))  RotateCameraView(camera, camera->up,  rot);
-                if (IsKeyDown(KEY_RIGHT)) RotateCameraView(camera, camera->up, -rot);
-                if (IsKeyDown(KEY_UP))    RotateCameraView(camera, right,  rot);
-                if (IsKeyDown(KEY_DOWN))  RotateCameraView(camera, right, -rot);
+                    // Arrow keys
+                    float rot = 0.03f; // radians per frame (~1.8 deg)
+                    if (IsKeyDown(KEY_LEFT))  RotateCameraView(camera, camera->up,  rot);
+                    if (IsKeyDown(KEY_RIGHT)) RotateCameraView(camera, camera->up, -rot);
+                    if (IsKeyDown(KEY_UP))    RotateCameraView(camera, right,  rot);
+                    if (IsKeyDown(KEY_DOWN))  RotateCameraView(camera, right, -rot);
+                }
 
-                // Left mouse drag. Only starts if the click began outside the control panel
-                // (and outside the show/hide-interface eye button), so UI drags never rotate.
-                static bool mouseRotating = false;
-                if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
-                    Vector2 mouse = GetMousePosition();
-                    mouseRotating = !CheckCollisionPointRec(mouse, uiRect) &&
-                                    !CheckCollisionPointRec(mouse, (Rectangle){0, 0, 20, 20});
-                }
-                if (!IsMouseButtonDown(MOUSE_BUTTON_LEFT)) mouseRotating = false;
-                if (mouseRotating) {
-                    Vector2 d = GetMouseDelta();
-                    float sens = 0.005f; // radians per pixel
-                    RotateCameraView(camera, camera->up, -d.x * sens); // yaw
-                    RotateCameraView(camera, right,      -d.y * sens); // pitch
-                }
             }
         }
 
         { // Transform controls for the active camera
-            Camera dummyCamera = {};
+            Camera dummyCamera = {0};
             Camera *activeCamera = NULL;
             static bool lock = false;
 
@@ -984,13 +1165,12 @@ void CreateInterface(RenderSettings *settings, Scene *scene) {
 
                     rect = (Rectangle){left, uiTop, 88, 16};
                     if (!GuiIsLocked() && CheckCollisionPointRec(GetMousePosition(), rect)) {
-                        tooltip = "Aim the active camera at the active model";
+                        tooltip = "Frame the selected model (F)";
                     }
                     bool hasActiveModel = 0 <= scene->activeModelIndex &&
                                          scene->activeModelIndex < arrlen(scene->models);
-                    if (GuiButton(rect, "Focus Model") && hasActiveModel) {
-                        Model *model = &scene->models[scene->activeModelIndex];
-                        activeCamera->Target = model->position;
+                    if (GuiButton(rect, "Frame Model") && hasActiveModel) {
+                        FrameCameraOnModel(activeCamera, &scene->models[scene->activeModelIndex]);
                     }
                 }
             uiTop += rowHeight;
@@ -1190,6 +1370,23 @@ void CreateInterface(RenderSettings *settings, Scene *scene) {
     // Global GUI elements that are drawn after all the other stuff (and maybe on top of it).
     // Those elements should also be always responsive, so we always unlock before drawing it.
     GuiUnlock();
+    if (0 <= scene->activeCameraIndex &&
+        scene->activeCameraIndex < arrlen(scene->cameras)) {
+        int width = GetScreenWidth();
+        int height = GetScreenHeight();
+        if (width - 72 > uiRect.x + uiRect.width + 8) {
+            DrawCameraOrientationGizmo(&scene->cameras[scene->activeCameraIndex], width - 42, 48);
+        }
+
+        const char *navigationHint = "LMB: Orbit  |  Wheel: Zoom  |  RMB: Pan  |  F: Frame";
+        int hintWidth = MeasureText(navigationHint, 12);
+        int hintX = width - hintWidth - 20;
+        int hintY = height - 26;
+        if (hintX > uiRect.x + uiRect.width + 8) {
+            DrawRectangle(hintX - 6, hintY - 4, hintWidth + 12, 21, (Color){20, 24, 32, 210});
+            DrawText(navigationHint, hintX, hintY, 12, RAYWHITE);
+        }
+    }
     if(tooltip != NULL) {
         Vector2 mouse = GetMousePosition();
         Tooltip(tooltip, mouse.x, mouse.y);
@@ -1250,6 +1447,11 @@ void CreateInterface(RenderSettings *settings, Scene *scene) {
                         model.vertexCount = arrlen(model.vertices);
                         AddModel(scene, model);
                         scene->activeModelIndex = arrlen(scene->models) - 1;
+                        if (0 <= scene->activeCameraIndex &&
+                            scene->activeCameraIndex < arrlen(scene->cameras)) {
+                            FrameCameraOnModel(&scene->cameras[scene->activeCameraIndex],
+                                               &scene->models[scene->activeModelIndex]);
+                        }
                     }
                 } break;
                 default: {
