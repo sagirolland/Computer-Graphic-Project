@@ -849,7 +849,7 @@ void CreateInterface(RenderSettings *settings, Scene *scene) {
                         if (scene->activeModelIndex >= modelIndex) scene->activeModelIndex -= 1;
                         --modelCount;
                         // Stop here: the next model's delete button would sit at the same spot and also
-                        // fire this frame (the mouse release is still active), deleting everything.
+                        // fire this frame deleting everything.
                         break;
                     }
                 }
@@ -1209,7 +1209,7 @@ void CreateInterface(RenderSettings *settings, Scene *scene) {
                     bool hasActive = 0 <= scene->activeCameraIndex && scene->activeCameraIndex < cameraCount;
                     Camera camera;
                     if (hasActive) {
-                        // Copy the active camera and shift it 2 units to its right, so its widget is visible
+                        // Copy the active camera and shift it 2 units to its right
                         camera = scene->cameras[scene->activeCameraIndex];
                         Vec3 fwd   = V3Normalize(V3Sub(camera.Target, camera.Position));
                         Vec3 right = V3Normalize(V3Cross(fwd, camera.up));
@@ -1222,7 +1222,7 @@ void CreateInterface(RenderSettings *settings, Scene *scene) {
                     }
                     AddCamera(scene, camera);
                     cameraCount = arrlen(scene->cameras);
-                    // Keep the current view; only make the new camera active if nothing was active
+                    // Keep the current view, only make the new camera active if nothing was active
                     if (!hasActive) scene->activeCameraIndex = cameraCount - 1;
                 }
                 uiTop += 2 * margin + 2;
@@ -1310,7 +1310,7 @@ void CreateInterface(RenderSettings *settings, Scene *scene) {
                         }
 
                         // Stop here: the next camera's delete button would sit at the same spot and also
-                        // fire this frame (the mouse release is still active), deleting everything.
+                        // fire this frame deleting everything.
                         break;
                     }
                 }

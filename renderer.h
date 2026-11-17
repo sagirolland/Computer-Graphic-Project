@@ -20,7 +20,7 @@ typedef struct RenderSettings {
     Vec4 tint;
     int problemX, problemY;
     RenderingMethod renderingMethod;
-    bool showCameraWidgets; // Bounding box / normals toggles live on each Model
+    bool showCameraWidgets;
 } RenderSettings;
 
 typedef struct Renderer {
@@ -52,11 +52,8 @@ Vec3 worldToScreen(Vec3 v_world, Mat4 fromWorldToCamera, Mat4 fromCameraToScreen
 }
 
 Vec2 mapToScreenRange(Vec3 v_screen, Mat4 fromCameraToScreen, Camera *camera, RenderSettings *settings){
-    // After projection (ortho or perspective) v_screen is in NDC.
-    // Map with a FIXED pixel scale centered on the window, so the distance between two projected
-    // points doesn't depend on the window size (resizing shows more/less of the scene, no stretching).
-    (void)fromCameraToScreen; (void)camera; // unused, kept for the signature
-    const float S = 450.f; // pixels per NDC unit (half of the initial 900px window)
+    (void)fromCameraToScreen; (void)camera; 
+    const float S = 450.f;
     Vec2 v_mapped = { settings->width  * 0.5f + v_screen.x * S,
                       settings->height * 0.5f + v_screen.y * S };
     return v_mapped;
@@ -135,7 +132,6 @@ static void CameraDraw(Renderer *renderer, int x, int y, Vec4 colour){
     Draw3x3Square(renderer, x, y, colour);
 }
 
-// Draws a world-space segment: skips it if either end is closer than the near plane, otherwise projects and draws it
 static void DrawSegmentWorld(Renderer *renderer, Vec3 a_world, Vec3 b_world, Mat4 fromWorldToCamera,
                              Mat4 fromCameraToScreen, Camera *camera, RenderSettings *settings, Vec4 color){
     float zNear = camera->zBounds.y;
@@ -145,7 +141,6 @@ static void DrawSegmentWorld(Renderer *renderer, Vec3 a_world, Vec3 b_world, Mat
     LineDraw(renderer, (int)a.x, (int)a.y, (int)b.x, (int)b.y, color);
 }
 
-// Normals transform with the inverse-transpose of the model matrix's 3x3 part (stays correct under non-uniform scale)
 static Mat3 NormalMatrix(Mat4 m){
     Mat3 m3 = { .r0 = m.r0.xyz, .r1 = m.r1.xyz, .r2 = m.r2.xyz };
     return M3Transpose(M3Inverse(m3));
@@ -184,9 +179,9 @@ void RenderScene(Scene *scene, Renderer *renderer, double time) {
         fromCameraToScreen = getM4Perspective(camera);
     }
 
-    //Added: going through every triangle on the model, projecting the 3D corners into 2D using the camera,
+    //Going through every triangle on the model, projecting the 3D corners into 2D using the camera,
     //then drawing lines between them. We will also save the points with the max/min coordinate in each axis 
-    //in order to later draw the bounding boxes (TODO)
+    //in order to later draw the bounding boxes
     for (int modelIndex = 0; modelIndex < arrlen(scene->models); ++modelIndex) {
         Model model = scene->models[modelIndex];
         if(model.hidden) continue;
@@ -206,7 +201,6 @@ void RenderScene(Scene *scene, Renderer *renderer, double time) {
         float z_max = 0; float z_min = 0;
 
         for (int i = 0; i < arrlen(triangles); i += 1) {
-            // Fetch the 3d vertices in model coordinates
             Vec3 v1_model = model.vertices[triangles[i].corners[0].values[0] - 1];
             Vec3 v2_model = model.vertices[triangles[i].corners[1].values[0] - 1];
             Vec3 v3_model = model.vertices[triangles[i].corners[2].values[0] - 1];

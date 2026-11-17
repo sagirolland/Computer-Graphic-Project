@@ -59,7 +59,7 @@ void AddModel(Scene *scene, Model model) {
 }
 
 void RemoveModel(Scene *scene, int modelIndex) {
-    FreeModel(&scene->models[modelIndex]); // release its vertex/normal/triangle arrays
+    FreeModel(&scene->models[modelIndex]);
     arrdel(scene->models, modelIndex);
 }
 
